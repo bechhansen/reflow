@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reflow Controller</title>
+<link rel="icon" href="data:,">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:#f4f3f0;color:#1a1a1a;font-family:system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+
+:root{
+  --blue:#2558a0;
+  --orange:#c05c28;
+  --red:#b03030;
+  --green:#2a7850;
+  --amber:#a87020;
+  --bg:#f4f3f0;
+  --surface:#ffffff;
+  --border:#e2dfd9;
+  --text:#1a1a1a;
+  --muted:#737373;
+  --faint:#b0aba4;
+  --shadow:0 1px 3px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.04);
+}
+
+/* ── Header ── */
+header{
+  height:52px;background:var(--surface);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;padding:0 20px;
+}
+.logo{
+  display:flex;align-items:center;gap:9px;
+  font-size:.9rem;font-weight:600;color:var(--text);letter-spacing:-.01em;
+}
+.logo svg{color:var(--orange)}
+
+#status-bar{display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--muted)}
+#ws-dot{
+  width:6px;height:6px;border-radius:50%;background:var(--faint);
+  display:inline-block;transition:background .3s;flex-shrink:0;
+}
+#ws-dot.connected{background:var(--green)}
+
+/* ── Layout ── */
+main{
+  height:calc(100vh - 52px);overflow:hidden;display:grid;
+  grid-template-columns:1fr;grid-template-rows:260px 1fr;
+}
+@media(min-width:768px){main{grid-template-columns:1fr 320px;grid-template-rows:1fr}}
+
+/* ── Graph panel ── */
+#graph-panel{
+  background:var(--surface);padding:20px 22px 14px;
+  display:flex;flex-direction:column;overflow:hidden;min-height:0;
+}
+@media(min-width:768px){#graph-panel{border-right:1px solid var(--border)}}
+
+#graph-stats{
+  display:grid;grid-template-columns:auto auto 1fr;gap:0 28px;
+  align-items:end;margin-bottom:16px;flex-shrink:0;
+}
+.stat-label{font-size:.65rem;font-weight:500;text-transform:uppercase;letter-spacing:.09em;color:var(--faint);margin-bottom:3px}
+.stat-value{font-size:2rem;font-weight:300;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+#temp-big{color:var(--orange)}
+#setpoint-small{font-size:1.3rem;color:var(--text)}
+#phase-label{font-size:1rem;font-weight:400;color:var(--muted);margin-bottom:3px}
+
+#graph-wrap{flex:1;min-height:0;position:relative}
+#graph-wrap canvas{position:absolute;inset:0;width:100%!important;height:100%!important}
+
+#graph-footer{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-top:8px;flex-shrink:0;
+}
+#elapsed{font-size:.84rem;font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* ── Side panel ── */
+#side-panel{
+  background:var(--bg);overflow-y:auto;min-height:0;padding:10px 10px 16px;
+}
+@media(min-width:768px){#side-panel{border-left:none}}
+
+/* ── Cards ── */
+.card{background:var(--surface);border-radius:6px;box-shadow:var(--shadow);margin-bottom:8px;overflow:hidden}
+.card-header{
+  padding:12px 14px 0;font-size:.65rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.1em;color:var(--faint);
+}
+.card-body{padding:10px 14px 14px}
+
+/* ── Form controls ── */
+select,input[type=text],input[type=password]{
+  width:100%;background:var(--bg);border:1px solid var(--border);
+  color:var(--text);padding:7px 10px;border-radius:4px;font-size:.84rem;
+  outline:none;transition:border-color .15s;
+}
+select:focus,input:focus{border-color:var(--blue);outline:2px solid rgba(37,88,160,.12);outline-offset:-1px}
+input[type=file]{
+  width:100%;font-size:.78rem;color:var(--muted);
+  background:var(--bg);border:1px dashed var(--border);
+  padding:7px 10px;border-radius:4px;cursor:pointer;
+}
+
+/* ── Buttons ── */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:5px;
+  padding:7px 14px;border:1px solid transparent;border-radius:4px;
+  cursor:pointer;font-size:.82rem;font-weight:500;min-height:34px;
+  transition:background .1s,border-color .1s,color .1s;background:transparent;white-space:nowrap;
+}
+.btn:disabled{opacity:.35;cursor:default;pointer-events:none}
+
+.btn-primary  {background:var(--blue);color:#fff;border-color:var(--blue)}
+.btn-primary:hover{background:#1d4a8a}
+.btn-danger   {background:var(--red);color:#fff;border-color:var(--red)}
+.btn-danger:hover{background:#962626}
+.btn-secondary{background:var(--surface);color:var(--text);border-color:var(--border)}
+.btn-secondary:hover{border-color:#c8c4be;background:#faf9f7}
+.btn-amber    {color:var(--amber);border-color:var(--amber)}
+.btn-amber:hover{background:#fdf6e8}
+.btn-success  {color:var(--green);border-color:var(--green)}
+.btn-success:hover{background:#edf7f2}
+
+.row{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+.row:last-child{margin-bottom:0}
+
+/* ── Status badges ── */
+.badge{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:3px 8px;border-radius:3px;font-size:.72rem;font-weight:500;
+}
+.badge::before{content:'';width:5px;height:5px;border-radius:50%;background:currentColor;flex-shrink:0}
+.badge-on      {background:#edf7f2;color:var(--green)}
+.badge-off     {background:#fdf6e8;color:var(--amber)}
+.badge-unpaired{background:#fef2f2;color:var(--red)}
+
+/* ── Run state label ── */
+#run-state{font-size:.77rem;color:var(--faint);margin-top:4px}
+#run-state.running {color:var(--green)}
+#run-state.complete{color:var(--blue)}
+#run-state.error   {color:var(--red)}
+
+/* ── Duty level bar ── */
+#duty-meter{display:flex;gap:3px;margin-top:8px}
+.duty-pip{flex:1;height:3px;border-radius:2px;background:var(--border);transition:background .25s}
+.duty-pip.active{background:var(--orange)}
+
+/* ── Pairing section ── */
+#pairing-overlay{
+  display:none;background:#fdfbf4;border:1px solid #e0d090;
+  border-radius:4px;padding:12px;margin-top:8px;text-align:center;
+}
+#pairing-overlay.active{display:block}
+#pairing-countdown{
+  font-size:2rem;font-weight:300;color:var(--amber);
+  font-variant-numeric:tabular-nums;line-height:1;margin:4px 0;
+}
+#pair-hint{font-size:.74rem;color:var(--muted)}
+
+/* ── Profile list ── */
+.profile-item{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:6px 0;border-bottom:1px solid var(--border);font-size:.82rem;
+}
+.profile-item:last-child{border-bottom:none}
+
+/* ── Wi-Fi scan ── */
+#wifi-scan-list{max-height:120px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;margin:6px 0}
+#wifi-scan-list div{
+  padding:7px 10px;font-size:.8rem;cursor:pointer;
+  border-bottom:1px solid var(--border);display:flex;justify-content:space-between;
+}
+#wifi-scan-list div:last-child{border-bottom:none}
+#wifi-scan-list div:hover{background:var(--bg)}
+
+.sep{border:none;border-top:1px solid var(--border);margin:10px 0}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+      <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>
+    </svg>
+    Reflow Controller
+  </div>
+  <div id="status-bar">
+    <span id="ws-dot"></span>
+    <span id="wifi-info">connecting…</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- Graph panel -->
+  <div id="graph-panel">
+    <div id="graph-stats">
+      <div>
+        <div class="stat-label">Temperature</div>
+        <div class="stat-value" id="temp-big">— °C</div>
+      </div>
+      <div>
+        <div class="stat-label">Setpoint</div>
+        <div class="stat-value" id="setpoint-small">—</div>
+      </div>
+      <div>
+        <div class="stat-label">Phase</div>
+        <div id="phase-label" style="font-size:1rem;font-weight:400;color:var(--muted);line-height:1;margin-bottom:3px">Standby</div>
+      </div>
+    </div>
+
+    <div id="graph-wrap">
+      <canvas id="chart"></canvas>
+    </div>
+
+    <div id="graph-footer">
+      <span style="font-size:.72rem;color:var(--faint)">Elapsed</span>
+      <span id="elapsed">00:00</span>
+    </div>
+  </div>
+
+  <!-- Side panel -->
+  <div id="side-panel">
+
+    <div class="card">
+      <div class="card-header">Reflow</div>
+      <div class="card-body">
+        <div class="row">
+          <select id="profile-select" onchange="onProfileChange()"><option value="">Loading…</option></select>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary"  id="btn-start" onclick="startReflow()" style="flex:1">Start</button>
+          <button class="btn btn-danger"   id="btn-stop"  onclick="stopReflow()"  style="flex:1" disabled>Stop</button>
+        </div>
+        <div id="run-state"></div>
+        <div id="duty-meter">
+          <div class="duty-pip" id="pip0"></div>
+          <div class="duty-pip" id="pip1"></div>
+          <div class="duty-pip" id="pip2"></div>
+          <div class="duty-pip" id="pip3"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Zigbee Plug</div>
+      <div class="card-body">
+        <div class="row" style="justify-content:space-between;margin-bottom:10px">
+          <span id="plug-badge" class="badge badge-unpaired">Not paired</span>
+        </div>
+        <div class="row" style="flex-wrap:wrap">
+          <button class="btn btn-amber"     id="btn-pair"        onclick="startPairing()">Pair</button>
+          <button class="btn btn-secondary" id="btn-unpair"      onclick="unpair()">Unpair</button>
+          <button class="btn btn-secondary" id="btn-plug-toggle" onclick="togglePlug()" disabled>Test</button>
+        </div>
+        <div id="pairing-overlay">
+          <div style="font-size:.68rem;text-transform:uppercase;letter-spacing:.09em;color:var(--faint)">Pairing window open</div>
+          <div id="pairing-countdown">60</div>
+          <div id="pair-hint">Put plug into pairing mode</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Profiles</div>
+      <div class="card-body">
+        <div id="profile-list"></div>
+        <hr class="sep">
+        <input type="file" id="profile-file" accept=".json" style="margin-bottom:8px">
+        <button class="btn btn-secondary" onclick="uploadProfile()" style="width:100%">Upload Profile</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Wi-Fi</div>
+      <div class="card-body">
+        <button class="btn btn-secondary" onclick="scanWifi()" style="width:100%;margin-bottom:8px">Scan Networks</button>
+        <div id="wifi-scan-list"></div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <input type="text"      id="wifi-ssid" placeholder="SSID">
+          <input type="password"  id="wifi-pass" placeholder="Password">
+          <button class="btn btn-primary" onclick="saveWifi()" style="width:100%">Save &amp; Reboot</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script src="/chart.js"></script>
+<script>
+/* ── State ── */
+let ws = null, chart = null;
+let currentWaypoints = null;
+let pairCountdown = 0, pairTimer = null;
+let lastState = 'idle', lastPlugOn = false;
+
+/* ── WebSocket ── */
+function connect() {
+  ws = new WebSocket('ws://' + location.host + '/ws');
+  ws.onopen = () => {
+    document.getElementById('ws-dot').className = 'connected';
+    loadProfiles();
+  };
+  ws.onclose = () => {
+    document.getElementById('ws-dot').className = '';
+    document.getElementById('wifi-info').textContent = 'reconnecting…';
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = e => handleMessage(JSON.parse(e.data));
+}
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+/* ── Message handler ── */
+function handleMessage(msg) {
+  if      (msg.type === 'telemetry')       handleTelemetry(msg);
+  else if (msg.type === 'pairing_open')    handlePairingOpen(msg.remaining);
+  else if (msg.type === 'pairing_success') handlePairingSuccess(msg.plug_name);
+  else if (msg.type === 'pairing_failed')  handlePairingFailed();
+}
+
+function handleTelemetry(d) {
+  /* Wi-Fi */
+  document.getElementById('wifi-info').textContent =
+    d.wifi_mode === 'ap' ? 'AP · 192.168.4.1' : 'STA · ' + (d.ip || '');
+
+  /* Temperature stats */
+  document.getElementById('temp-big').textContent = d.sensor_ok ? d.temp.toFixed(1) + ' °C' : '—';
+  document.getElementById('setpoint-small').textContent =
+    d.state === 'running' ? d.setpoint.toFixed(1) + ' °C' : '—';
+
+  /* Phase */
+  document.getElementById('phase-label').textContent =
+    d.state === 'running'  ? d.phase :
+    d.state === 'complete' ? 'Complete' : 'Standby';
+
+  /* Elapsed */
+  const mm = String(Math.floor(d.elapsed / 60)).padStart(2, '0');
+  const ss = String(d.elapsed % 60).padStart(2, '0');
+  document.getElementById('elapsed').textContent = mm + ':' + ss;
+
+  /* Buttons */
+  const running = d.state === 'running';
+  document.getElementById('btn-start').disabled = running || !d.sensor_ok;
+  document.getElementById('btn-stop').disabled  = !running;
+
+  /* Run state label */
+  const rs = document.getElementById('run-state');
+  if (!d.sensor_ok && d.state !== 'running') {
+    rs.textContent = 'Sensor not connected';
+    rs.className   = 'error';
+  } else {
+    rs.textContent = { idle:'', running:'Running', complete:'Complete', error:'Sensor error' }[d.state] || '';
+    rs.className   = d.state;
+  }
+
+  /* Duty pips */
+  for (let i = 0; i < 4; i++)
+    document.getElementById('pip' + i).className = 'duty-pip' + (i < d.duty_steps ? ' active' : '');
+
+  /* Plug badge */
+  const badge = document.getElementById('plug-badge');
+  if (d.plug_paired) {
+    badge.textContent = d.plug_on ? 'On' : 'Off';
+    badge.className   = 'badge ' + (d.plug_on ? 'badge-on' : 'badge-off');
+  } else {
+    badge.textContent = 'Not paired';
+    badge.className   = 'badge badge-unpaired';
+  }
+
+  /* Test button */
+  lastPlugOn = d.plug_on;
+  const btn = document.getElementById('btn-plug-toggle');
+  btn.disabled  = !(d.plug_paired && d.state !== 'running');
+  btn.className = 'btn ' + (d.plug_on ? 'btn-danger' : 'btn-success');
+
+  /* Graph */
+  if (chart && running) {
+    if (lastState !== 'running') {
+      chart.data.datasets[0].data = [];
+      if (currentWaypoints) drawProfileLine(currentWaypoints);
+    }
+    chart.data.datasets[0].data.push({ x: d.elapsed, y: d.temp });
+    chart.update('none');
+  }
+  if (lastState === 'running' && d.state !== 'running') chart && chart.update();
+  lastState = d.state;
+}
+
+/* ── Chart ── */
+function initChart() {
+  const ctx = document.getElementById('chart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      datasets: [
+        { label: 'Actual',  data: [], borderColor: '#c05c28',
+          backgroundColor: 'rgba(192,92,40,.06)', fill: true,
+          pointRadius: 0, borderWidth: 1.5, tension: 0.3, parsing: false },
+        { label: 'Target',  data: [], borderColor: '#2558a0',
+          backgroundColor: 'transparent',
+          pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4], tension: 0, parsing: false },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      scales: {
+        x: { type: 'linear',
+             title: { display: true, text: 's', color: '#b0aba4', font: { size: 11 } },
+             ticks: { color: '#b0aba4', font: { size: 11 }, maxTicksLimit: 8 },
+             grid: { color: '#eae7e2' },
+             border: { color: '#e2dfd9' } },
+        y: { min: 0, max: 270,
+             title: { display: true, text: '°C', color: '#b0aba4', font: { size: 11 } },
+             ticks: { color: '#b0aba4', font: { size: 11 } },
+             grid: { color: '#eae7e2' },
+             border: { color: '#e2dfd9' } }
+      },
+      plugins: {
+        legend: { labels: { color: '#737373', boxWidth: 12, font: { size: 11 } } }
+      }
+    }
+  });
+}
+
+function drawProfileLine(waypoints) {
+  chart.data.datasets[1].data = waypoints.map(wp => ({ x: wp.time, y: wp.temp }));
+  chart.options.scales.x.max = waypoints[waypoints.length - 1].time + 30;
+  chart.update('none');
+}
+
+/* ── Profiles ── */
+function loadProfiles() {
+  fetch('/api/profiles').then(r => r.json()).then(names => {
+    const sel = document.getElementById('profile-select');
+    sel.innerHTML = '';
+    names.forEach(n => {
+      const opt = document.createElement('option');
+      opt.value = n; opt.textContent = n; sel.appendChild(opt);
+    });
+    renderProfileList(names);
+    if (names.length) onProfileChange();
+  }).catch(() => {});
+}
+
+function onProfileChange() {
+  const name = document.getElementById('profile-select').value;
+  if (!name) return;
+  fetch('/api/profiles/' + encodeURIComponent(name))
+    .then(r => r.json())
+    .then(p => {
+      if (!p.waypoints) return;
+      currentWaypoints = p.waypoints;
+      chart.data.datasets[0].data = [];
+      drawProfileLine(p.waypoints);
+    });
+}
+
+function renderProfileList(names) {
+  const div = document.getElementById('profile-list');
+  div.innerHTML = '';
+  if (!names.length) {
+    div.innerHTML = '<div style="font-size:.78rem;color:var(--faint);padding:4px 0">No profiles</div>';
+    return;
+  }
+  names.forEach(n => {
+    const row = document.createElement('div');
+    row.className = 'profile-item';
+    row.innerHTML = `<span>${n}</span>
+      <button class="btn btn-secondary" style="padding:3px 9px;min-height:auto;font-size:.72rem;color:var(--red);border-color:var(--red)"
+        onclick="deleteProfile('${n}')">Delete</button>`;
+    div.appendChild(row);
+  });
+}
+
+function uploadProfile() {
+  const file = document.getElementById('profile-file').files[0];
+  if (!file) return alert('Select a .json file first');
+  const reader = new FileReader();
+  reader.onload = e => {
+    let json; try { json = JSON.parse(e.target.result); } catch { alert('Invalid JSON'); return; }
+    const name = json.name || file.name.replace('.json', '');
+    fetch('/api/profiles/' + encodeURIComponent(name), {
+      method: 'POST', body: e.target.result, headers: { 'Content-Type': 'application/json' }
+    }).then(() => loadProfiles());
+  };
+  reader.readAsText(file);
+}
+
+function deleteProfile(name) {
+  if (!confirm('Delete "' + name + '"?')) return;
+  fetch('/api/profiles/' + encodeURIComponent(name), { method: 'DELETE' }).then(() => loadProfiles());
+}
+
+/* ── Reflow ── */
+function startReflow() {
+  const name = document.getElementById('profile-select').value;
+  if (!name) return alert('Select a profile first');
+  chart.data.datasets[0].data = [];
+  chart.update('none');
+  send({ type: 'start', profile: name });
+}
+function stopReflow() { send({ type: 'stop' }); }
+
+/* ── Zigbee pairing ── */
+function startPairing() {
+  if (!ws || ws.readyState !== 1) { alert('Not connected to device.'); return; }
+  send({ type: 'start_pairing' });
+  handlePairingOpen(60);
+}
+
+function handlePairingOpen(remaining) {
+  pairCountdown = remaining;
+  document.getElementById('pairing-overlay').classList.add('active');
+  document.getElementById('pairing-countdown').textContent = remaining;
+  clearInterval(pairTimer);
+  pairTimer = setInterval(() => {
+    pairCountdown--;
+    document.getElementById('pairing-countdown').textContent = pairCountdown;
+    if (pairCountdown <= 0) { clearInterval(pairTimer); closePairingOverlay(); }
+  }, 1000);
+}
+function handlePairingSuccess(name) { clearInterval(pairTimer); closePairingOverlay(); alert('Paired: ' + name); }
+function handlePairingFailed()     { clearInterval(pairTimer); closePairingOverlay(); alert('No device found.'); }
+function closePairingOverlay()     { document.getElementById('pairing-overlay').classList.remove('active'); }
+
+function unpair()     { if (!confirm('Unpair plug?')) return; send({ type: 'unpair' }); }
+function togglePlug() { send({ type: 'plug_set', on: !lastPlugOn }); }
+
+/* ── Wi-Fi ── */
+function scanWifi() {
+  document.getElementById('wifi-scan-list').innerHTML =
+    '<div style="color:var(--faint);font-style:italic;padding:7px 10px">Scanning…</div>';
+  fetch('/api/wifi/scan').then(r => r.json()).then(aps => {
+    const list = document.getElementById('wifi-scan-list');
+    list.innerHTML = '';
+    aps.sort((a, b) => b.rssi - a.rssi).forEach(ap => {
+      const d = document.createElement('div');
+      d.innerHTML = `<span>${ap.ssid}</span><span style="color:var(--faint)">${ap.rssi} dBm</span>`;
+      d.onclick = () => { document.getElementById('wifi-ssid').value = ap.ssid; };
+      list.appendChild(d);
+    });
+  }).catch(() => {
+    document.getElementById('wifi-scan-list').innerHTML =
+      '<div style="color:var(--red);padding:7px 10px">Scan failed</div>';
+  });
+}
+
+function saveWifi() {
+  const ssid = document.getElementById('wifi-ssid').value.trim();
+  const pass = document.getElementById('wifi-pass').value;
+  if (!ssid) return alert('Enter an SSID');
+  if (!confirm('Save credentials for "' + ssid + '" and reboot?')) return;
+  fetch('/api/wifi/credentials', {
+    method: 'POST', body: JSON.stringify({ ssid, password: pass }),
+    headers: { 'Content-Type': 'application/json' }
+  }).then(() => alert('Saved. Rebooting…'));
+}
+
+/* ── Init ── */
+document.addEventListener('DOMContentLoaded', () => { initChart(); connect(); });
+</script>
+</body>
+</html>

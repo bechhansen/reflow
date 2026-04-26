@@ -1,0 +1,25 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "temperature.c"
+        "zigbee_plug.c"
+        "reflow_profile.c"
+        "reflow_ctrl.c"
+        "web_server.c"
+        "wifi_manager.c"
+    INCLUDE_DIRS "."
+    PRIV_REQUIRES
+        nvs_flash
+        esp_driver_i2c
+        esp_driver_uart
+        esp_http_server
+        spiffs
+        json
+        esp_wifi
+        esp_coex
+        esp_event
+        esp_netif
+        ieee802154
+        esp_timer
+        mdns
+)

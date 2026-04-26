@@ -1,0 +1,12 @@
+{
+  "name": "Sn63Pb37 Leaded",
+  "description": "Classic eutectic leaded solder. Peak 230°C, TAL ~45s. Source: IPC-J-STD-020, Kester.",
+  "waypoints": [
+    { "time":   0, "temp":  25, "label": "Start"   },
+    { "time":  60, "temp": 150, "label": "Preheat" },
+    { "time": 180, "temp": 165, "label": "Soak"    },
+    { "time": 202, "temp": 230, "label": "Reflow"  },
+    { "time": 222, "temp": 230, "label": "Peak"    },
+    { "time": 310, "temp":  50, "label": "Cool"    }
+  ]
+}

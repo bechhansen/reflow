@@ -1,0 +1,38 @@
+# Flash size (ESP32-C6 dev boards ship with 4MB)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Partition table
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Zigbee coordinator
+CONFIG_ZB_ENABLED=y
+CONFIG_ZB_ZCZR=y
+
+# mbedTLS (required for Zigbee security)
+CONFIG_MBEDTLS_CMAC_C=y
+CONFIG_MBEDTLS_SSL_PROTO_DTLS=y
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECJPAKE=y
+CONFIG_MBEDTLS_ECJPAKE_C=y
+
+# SPIFFS
+CONFIG_SPIFFS_MAX_PARTITIONS=1
+
+# HTTP server - enable WebSocket support
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
+# Wi-Fi
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
+
+# Wi-Fi / Zigbee coexistence (ESP32-C6 shares one 2.4 GHz radio)
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+
+# LWIP — default of 10 is too low once mDNS + httpd + DHCP all open sockets
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# FreeRTOS tick rate (1ms resolution)
+CONFIG_FREERTOS_HZ=1000
+
+# Stack sizes
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

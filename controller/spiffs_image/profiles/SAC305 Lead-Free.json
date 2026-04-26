@@ -1,0 +1,12 @@
+{
+  "name": "SAC305 Lead-Free",
+  "description": "Standard lead-free profile for SAC305 (Sn96.5/Ag3/Cu0.5). Peak 245°C, TAL ~50s. Source: IPC-J-STD-020, Kester.",
+  "waypoints": [
+    { "time":   0, "temp":  25, "label": "Start"   },
+    { "time":  60, "temp": 150, "label": "Preheat" },
+    { "time": 180, "temp": 180, "label": "Soak"    },
+    { "time": 202, "temp": 245, "label": "Reflow"  },
+    { "time": 217, "temp": 245, "label": "Peak"    },
+    { "time": 320, "temp":  50, "label": "Cool"    }
+  ]
+}

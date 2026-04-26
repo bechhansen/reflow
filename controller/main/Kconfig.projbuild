@@ -1,0 +1,30 @@
+menu "Reflow Controller"
+
+    config REFLOW_WIFI_SSID
+        string "Wi-Fi SSID"
+        default ""
+        help
+            Home Wi-Fi SSID to connect to. Leave empty to always start in AP mode.
+
+    config REFLOW_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default ""
+        help
+            Home Wi-Fi password.
+
+    config REFLOW_I2C_SDA_PIN
+        int "I2C SDA GPIO (MLX90614)"
+        default 6
+        range 0 21
+
+    config REFLOW_I2C_SCL_PIN
+        int "I2C SCL GPIO (MLX90614)"
+        default 7
+        range 0 21
+
+    config REFLOW_ZB_ENDPOINT
+        int "Local Zigbee endpoint"
+        default 10
+        range 1 240
+
+endmenu

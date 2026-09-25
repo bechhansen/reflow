@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>
 #include "esp_err.h"
 #include "reflow_profile.h"
 #include <stdbool.h>
@@ -12,17 +13,16 @@ typedef enum {
 
 typedef struct {
     float        temp;
-    float        setpoint;
-    int          elapsed_s;
-    char         phase[PROFILE_LABEL_LEN];
     ctrl_state_t state;
-    bool         plug_on;
-    int          duty_steps;
     bool         sensor_ok;
+    float        ambient;      /* MLX90614 die temperature (°C) */
 } ctrl_status_t;
 
 esp_err_t reflow_ctrl_init(void);
+
+/* The reflow control algorithm has been removed; these are deliberately empty
+   so the UI's Start and Stop buttons remain wired to something that exists. */
 esp_err_t reflow_ctrl_start(const reflow_profile_t *profile);
 esp_err_t reflow_ctrl_stop(void);
-esp_err_t reflow_ctrl_set_plug(bool on);
+
 void      reflow_ctrl_get_status(ctrl_status_t *out);

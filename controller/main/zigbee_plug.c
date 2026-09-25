@@ -32,6 +32,7 @@
 #define NVS_NS           "zigbee_plug"
 #define NVS_KEY_ADDR     "short_addr"
 #define NVS_KEY_EP       "endpoint"
+#define NVS_KEY_IEEE     "ieee_addr"
 #define PAIR_DURATION_S  60
 #define LOCAL_ENDPOINT   CONFIG_REFLOW_ZB_ENDPOINT
 
@@ -39,9 +40,22 @@ static const char *TAG = "zigbee_plug";
 
 static uint16_t s_plug_addr   = 0xFFFF;
 static uint8_t  s_plug_ep     = 0xFF;
+/* The 64-bit IEEE address is the plug's permanent identity. The 16-bit short
+   address is assigned by the network and CHANGES when the device rejoins — so
+   a pairing stored only as a short address is silently orphaned by a power cut,
+   and every command after that is addressed to a device that no longer exists.
+   That happened here: a whole run's worth of OFF commands went nowhere while
+   an iron sat powered, because the API returns a sequence number rather than a
+   delivery result. Commands are now addressed by IEEE. */
+static esp_zb_ieee_addr_t s_plug_ieee = {0};
+static bool     s_have_ieee   = false;
+static esp_zb_ieee_addr_t s_annce_ieee = {0};   /* seen in the join signal */
+static bool     s_annce_valid = false;
 static bool     s_pairing     = false;
 static zigbee_pairing_cb_t   s_pair_cb      = NULL;
 static zigbee_countdown_cb_t s_countdown_cb = NULL;
+static const zigbee_plug_listener_t *s_listener = NULL;
+static bool     s_started     = false;   /* zigbee_plug_init() ran: the stack lock exists */
 
 /* ── NVS helpers ─────────────────────────────────────────────────────────── */
 
@@ -53,9 +67,13 @@ static void load_pairing_from_nvs(void)
     uint8_t ep = 0;
     nvs_get_u8(nvs, NVS_KEY_EP, &ep);
     s_plug_ep = ep;
+    size_t ilen = sizeof(s_plug_ieee);
+    if (nvs_get_blob(nvs, NVS_KEY_IEEE, s_plug_ieee, &ilen) == ESP_OK && ilen == sizeof(s_plug_ieee))
+        s_have_ieee = true;
     nvs_close(nvs);
     if (s_plug_addr != 0xFFFF)
-        ESP_LOGI(TAG, "Restored pairing: addr=0x%04x ep=%d", s_plug_addr, s_plug_ep);
+        ESP_LOGI(TAG, "Restored pairing: addr=0x%04x ep=%d ieee=%s",
+                 s_plug_addr, s_plug_ep, s_have_ieee ? "yes" : "NO (short address only)");
 }
 
 static void save_pairing_to_nvs(uint16_t addr, uint8_t ep)
@@ -64,6 +82,7 @@ static void save_pairing_to_nvs(uint16_t addr, uint8_t ep)
     if (nvs_open(NVS_NS, NVS_READWRITE, &nvs) != ESP_OK) return;
     nvs_set_u16(nvs, NVS_KEY_ADDR, addr);
     nvs_set_u8(nvs, NVS_KEY_EP, ep);
+    if (s_have_ieee) nvs_set_blob(nvs, NVS_KEY_IEEE, s_plug_ieee, sizeof(s_plug_ieee));
     nvs_commit(nvs);
     nvs_close(nvs);
 }
@@ -83,12 +102,18 @@ static void plug_find_cb(esp_zb_zdp_status_t status, uint16_t addr, uint8_t ep, 
         ESP_LOGW(TAG, "Did not find On/Off cluster on joined device");
         return;
     }
-    ESP_LOGI(TAG, "Paired plug: addr=0x%04x ep=%d", addr, ep);
+    if (s_annce_valid) {
+        memcpy(s_plug_ieee, s_annce_ieee, sizeof(s_plug_ieee));
+        s_have_ieee = true;
+    }
+    ESP_LOGI(TAG, "Paired plug: addr=0x%04x ep=%d ieee=%s", addr, ep,
+             s_have_ieee ? "captured" : "NOT captured");
     s_plug_addr    = addr;
     s_plug_ep      = ep;
     s_pairing      = false;
     s_countdown_cb = NULL;
     save_pairing_to_nvs(addr, ep);
+    if (s_listener && s_listener->on_paired) s_listener->on_paired();
 
     if (s_pair_cb) {
         s_pair_cb(true, addr, ep);
@@ -97,6 +122,10 @@ static void plug_find_cb(esp_zb_zdp_status_t status, uint16_t addr, uint8_t ep, 
 }
 
 /* ── App signal handler (called from Zigbee task) ────────────────────────── */
+
+/* Defined below, with the commands they relate to. */
+static void network_up_cb(uint8_t param);
+static esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t id, const void *message);
 
 void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
 {
@@ -114,6 +143,9 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         if (status == ESP_OK) {
             ESP_LOGI(TAG, "Zigbee coordinator started (%s)",
                      esp_zb_bdb_is_factory_new() ? "factory-new" : "rebooted");
+            /* Tell the plug service the network is up; it switches a paired
+               plug off and confirms it. 3 s lets the network settle first. */
+            esp_zb_scheduler_alarm(network_up_cb, 0, 3000);
             if (esp_zb_bdb_is_factory_new()) {
                 esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_FORMATION);
             } else {
@@ -147,6 +179,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         esp_zb_zdo_signal_device_annce_params_t *dev =
             (esp_zb_zdo_signal_device_annce_params_t *)esp_zb_app_signal_get_params(p);
         ESP_LOGI(TAG, "Device joined: 0x%04x", dev->device_short_addr);
+        memcpy(s_annce_ieee, dev->ieee_addr, sizeof(s_annce_ieee));
+        s_annce_valid = true;
         if (s_pairing) {
             esp_zb_zdo_match_desc_req_param_t req = {
                 .dst_nwk_addr    = dev->device_short_addr,
@@ -177,6 +211,17 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     }
 }
 
+/* ── Radio coexistence: why the coex priorities are left at driver defaults ──
+
+   The C6 has one 2.4 GHz radio and Wi-Fi owns it most of the time: the plug's
+   replies are reliably received only in the ~15 ms after WE transmit (see
+   plug_fsm.h for how the read cadence exploits that). Measured on this board,
+   with esp_ieee802154_set_coex_config():
+     idle=MIDDLE                one fast run, not reproducible; worse with fast reads
+     txrx=MIDDLE                no Zigbee gain, Wi-Fi telemetry broke up
+     idle/txrx/txrx_at=HIGH     Wi-Fi dead (WebSocket dropped)
+   Wi-Fi modem sleep (WIFI_PS_MIN_MODEM) made no difference either. */
+
 /* ── Zigbee task ─────────────────────────────────────────────────────────── */
 
 static void zigbee_task(void *arg)
@@ -188,6 +233,7 @@ static void zigbee_task(void *arg)
     esp_zb_ep_list_t *ep_list = esp_zb_on_off_switch_ep_create(LOCAL_ENDPOINT, &sw_cfg);
     esp_zb_device_register(ep_list);
     esp_zb_set_primary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
+    esp_zb_core_action_handler_register(zcl_action_handler);
 
     load_pairing_from_nvs();
 
@@ -205,27 +251,128 @@ esp_err_t zigbee_plug_init(void)
     };
     ESP_RETURN_ON_ERROR(esp_zb_platform_config(&config), TAG, "platform config");
     xTaskCreate(zigbee_task, "zigbee", 4096, NULL, 5, NULL);
+    s_started = true;
     return ESP_OK;
 }
 
-esp_err_t zigbee_plug_set(bool on)
+void zigbee_plug_set_listener(const zigbee_plug_listener_t *listener)
 {
-    if (s_plug_addr == 0xFFFF) return ESP_ERR_INVALID_STATE;
+    s_listener = listener;
+}
 
+/* ── Plug commands (Zigbee context only) ─────────────────────────────────── */
+
+/* Address the plug by IEEE where known: a plug that rejoined has a different
+   short address, and a command sent to the old one silently goes nowhere.
+   Also refreshes the cached short address, which response filtering and
+   diagnostics use. */
+static void fill_plug_dst(esp_zb_zcl_basic_cmd_t *basic, esp_zb_zcl_address_mode_t *mode)
+{
+    basic->dst_endpoint = s_plug_ep;
+    basic->src_endpoint = LOCAL_ENDPOINT;
+    if (s_have_ieee) {
+        memcpy(basic->dst_addr_u.addr_long, s_plug_ieee, sizeof(basic->dst_addr_u.addr_long));
+        *mode = ESP_ZB_APS_ADDR_MODE_64_ENDP_PRESENT;
+
+        uint16_t nwk = esp_zb_address_short_by_ieee(s_plug_ieee);
+        if (nwk == 0xFFFF) {
+            ESP_LOGW(TAG, "plug not resolvable on the network right now "
+                          "(stored short addr 0x%04x) — frame may not arrive", s_plug_addr);
+        } else if (nwk != s_plug_addr) {
+            ESP_LOGW(TAG, "plug short address changed 0x%04x -> 0x%04x (rejoined)",
+                     s_plug_addr, nwk);
+            s_plug_addr = nwk;
+            save_pairing_to_nvs(nwk, s_plug_ep);
+        }
+    } else {
+        basic->dst_addr_u.addr_short = s_plug_addr;
+        *mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+    }
+}
+
+uint8_t zigbee_plug_send_on_off(bool on)
+{
     esp_zb_zcl_on_off_cmd_t cmd = {
-        .zcl_basic_cmd = {
-            .dst_addr_u.addr_short = s_plug_addr,
-            .dst_endpoint          = s_plug_ep,
-            .src_endpoint          = LOCAL_ENDPOINT,
-        },
-        .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
         .on_off_cmd_id = on ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID,
     };
+    fill_plug_dst(&cmd.zcl_basic_cmd, &cmd.address_mode);
+    uint8_t tsn = esp_zb_zcl_on_off_cmd_req(&cmd);
+    ESP_LOGI(TAG, "CMD %-3s -> 0x%04x ep%d (tsn %u, %s addressing)",
+             on ? "ON" : "OFF", s_plug_addr, s_plug_ep, tsn,
+             s_have_ieee ? "IEEE" : "short");
+    return tsn;
+}
 
-    esp_zb_lock_acquire(portMAX_DELAY);
-    esp_err_t err = esp_zb_zcl_on_off_cmd_req(&cmd);
-    esp_zb_lock_release();
-    return err;
+uint8_t zigbee_plug_read_on_off(void)
+{
+    uint16_t attr = ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID;
+    esp_zb_zcl_read_attr_cmd_t cmd = {
+        .clusterID   = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+        .direction   = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
+        .attr_number = 1,
+        .attr_field  = &attr,
+    };
+    fill_plug_dst(&cmd.zcl_basic_cmd, &cmd.address_mode);
+    uint8_t tsn = esp_zb_zcl_read_attr_cmd_req(&cmd);
+    ESP_LOGD(TAG, "READ OnOff -> 0x%04x ep%d (tsn %u)", s_plug_addr, s_plug_ep, tsn);
+    return tsn;
+}
+
+/* Runs as a scheduler alarm, i.e. in the Zigbee task. */
+static void network_up_cb(uint8_t param)
+{
+    (void)param;
+    if (s_listener && s_listener->on_network_up) s_listener->on_network_up();
+}
+
+/* Only frames from the paired plug's On/Off cluster are of interest. */
+static bool from_plug(const esp_zb_zcl_addr_t *src, uint8_t src_ep, uint16_t cluster)
+{
+    return s_plug_addr != 0xFFFF &&
+           cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF &&
+           src_ep == s_plug_ep &&
+           src->u.short_addr == s_plug_addr;
+}
+
+static bool attr_on_off(const esp_zb_zcl_attribute_t *attr, bool *on)
+{
+    if (attr->id != ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID ||
+        attr->data.type != ESP_ZB_ZCL_ATTR_TYPE_BOOL || !attr->data.value)
+        return false;
+    *on = *(const uint8_t *)attr->data.value != 0;
+    return true;
+}
+
+static esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t id, const void *message)
+{
+    if (!s_listener) return ESP_OK;
+
+    if (id == ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID) {
+        const esp_zb_zcl_cmd_read_attr_resp_message_t *m = message;
+        if (!from_plug(&m->info.src_address, m->info.src_endpoint, m->info.cluster))
+            return ESP_OK;
+        uint8_t tsn = m->info.header.tsn;
+        bool ok = false, on = false;
+        if (m->info.status == ESP_ZB_ZCL_STATUS_SUCCESS) {
+            for (const esp_zb_zcl_read_attr_resp_variable_t *v = m->variables; v; v = v->next) {
+                if (v->status == ESP_ZB_ZCL_STATUS_SUCCESS && attr_on_off(&v->attribute, &on)) {
+                    ok = true;
+                    break;
+                }
+            }
+        }
+        ESP_LOGD(TAG, "READ resp tsn %u: %s", tsn, ok ? (on ? "ON" : "OFF") : "failed");
+        if (s_listener->on_read_result) s_listener->on_read_result(tsn, ok, on);
+    } else if (id == ESP_ZB_CORE_REPORT_ATTR_CB_ID) {
+        const esp_zb_zcl_report_attr_message_t *m = message;
+        bool on;
+        if (from_plug(&m->src_address, m->src_endpoint, m->cluster) &&
+            attr_on_off(&m->attribute, &on)) {
+            ESP_LOGI(TAG, "REPORT OnOff: %s", on ? "ON" : "OFF");
+            if (s_listener->on_report) s_listener->on_report(on);
+        }
+    }
+    return ESP_OK;
 }
 
 bool zigbee_plug_is_paired(void)
@@ -247,12 +394,22 @@ esp_err_t zigbee_plug_start_pairing(uint8_t duration_s, zigbee_pairing_cb_t cb, 
 
 esp_err_t zigbee_plug_unpair(void)
 {
+    /* Under the stack lock: the Zigbee task reads these while addressing and
+       filtering, and the plug service must stop in the same step. */
+    if (s_started) esp_zb_lock_acquire(portMAX_DELAY);
     s_plug_addr = 0xFFFF;
     s_plug_ep   = 0xFF;
+    s_have_ieee = false;
+    /* Without a running stack there is nothing to stop, and the listener
+       would touch the Zigbee scheduler. */
+    if (s_started && s_listener && s_listener->on_unpaired) s_listener->on_unpaired();
+    if (s_started) esp_zb_lock_release();
+
     nvs_handle_t nvs;
     if (nvs_open(NVS_NS, NVS_READWRITE, &nvs) == ESP_OK) {
         nvs_erase_key(nvs, NVS_KEY_ADDR);
         nvs_erase_key(nvs, NVS_KEY_EP);
+        nvs_erase_key(nvs, NVS_KEY_IEEE);
         nvs_commit(nvs);
         nvs_close(nvs);
     }

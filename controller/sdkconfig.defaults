@@ -36,3 +36,10 @@ CONFIG_FREERTOS_HZ=1000
 
 # Stack sizes
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# RF calibration — full on every boot (~100 ms slower).
+# Partial calibration reuses NVS-cached data, and bad cached data leaves the
+# radio deaf after a hard reset: the boot scan reports "Scan found 0 AP(s)"
+# and STA connect fails with reason 201 (NO_AP_FOUND), while a soft
+# esp_restart() from the same image connects fine.
+CONFIG_ESP_PHY_RF_CAL_FULL=y

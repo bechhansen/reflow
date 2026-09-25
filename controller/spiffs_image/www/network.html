@@ -1,0 +1,200 @@
+<!-- Network settings. Deliberately a separate page rather than a card in the
+     main UI: it is used once during setup, needs no WebSocket, and must stay
+     usable in AP mode where telemetry and Zigbee are unavailable. -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Network — Reflow</title>
+<style>
+:root{
+  --bg:#f4f3f0; --surface:#fff; --border:#e3e0da; --text:#1a1a1a;
+  --muted:#737373; --faint:#a3a3a3; --red:#b4232b; --amber:#a87020;
+  --shadow:0 1px 2px rgba(0,0,0,.06);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font-family:system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+header{display:flex;align-items:center;gap:10px;height:52px;padding:0 14px;
+  background:var(--surface);border-bottom:1px solid var(--border)}
+header h1{font-size:.95rem;font-weight:500;margin:0}
+a.back{color:var(--muted);text-decoration:none;font-size:.82rem}
+a.back:hover{color:var(--text)}
+main{max-width:520px;margin:0 auto;padding:14px 14px 40px}
+.card{background:var(--surface);border-radius:6px;box-shadow:var(--shadow);
+  margin-bottom:12px;overflow:hidden}
+.card-header{padding:9px 14px;border-bottom:1px solid var(--border);
+  font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--muted)}
+.card-body{padding:12px 14px 14px}
+label{display:block;font-size:.72rem;font-weight:500;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--faint);margin:10px 0 4px}
+input{width:100%;padding:8px 10px;font-size:.88rem;font-family:inherit;
+  border:1px solid var(--border);border-radius:4px;background:var(--surface);
+  color:var(--text)}
+input:focus{outline:none;border-color:var(--muted)}
+.hint{font-size:.72rem;color:var(--faint);line-height:1.45;margin-top:5px}
+.btn{padding:8px 14px;font-size:.82rem;font-weight:500;font-family:inherit;
+  border:1px solid var(--border);border-radius:4px;background:var(--surface);
+  color:var(--text);cursor:pointer;min-height:36px}
+.btn:hover:not(:disabled){border-color:var(--muted)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn-primary{border-color:var(--text)}
+.btn-wide{width:100%}
+dl{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;margin:0;font-size:.8rem}
+dt{color:var(--muted)}
+dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+#scan-list{max-height:170px;overflow-y:auto;border:1px solid var(--border);
+  border-radius:4px;margin:6px 0}
+#scan-list div{display:flex;justify-content:space-between;gap:8px;
+  padding:7px 10px;font-size:.8rem;border-bottom:1px solid var(--border);
+  cursor:pointer}
+#scan-list div:last-child{border-bottom:none}
+#scan-list div:hover{background:var(--bg)}
+#msg{margin-top:10px;padding:8px 10px;border-radius:4px;font-size:.78rem;
+  line-height:1.45;display:none}
+#msg.show{display:block}
+#msg.err{background:#fef2f2;border:1px solid var(--red);color:var(--red)}
+#msg.ok{background:#f0fdf4;border:1px solid #2e7d32;color:#2e7d32}
+@media(prefers-color-scheme:dark){}
+</style>
+
+<header>
+  <a class="back" href="/">&larr; Back</a>
+  <h1>Network settings</h1>
+</header>
+
+<main>
+  <div class="card">
+    <div class="card-header">Current</div>
+    <div class="card-body">
+      <dl>
+        <dt>Mode</dt>      <dd id="c-mode">—</dd>
+        <dt>Address</dt>   <dd id="c-ip">—</dd>
+        <dt>Network</dt>   <dd id="c-ssid">—</dd>
+        <dt>Hostname</dt>  <dd id="c-host">—</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Wi-Fi</div>
+    <div class="card-body">
+      <button class="btn btn-wide" id="btn-scan" onclick="scan()">Scan networks</button>
+      <div id="scan-list"></div>
+      <label for="ssid">Network name</label>
+      <input type="text" id="ssid" autocomplete="off" spellcheck="false">
+      <label for="pass">Password</label>
+      <input type="password" id="pass" autocomplete="off">
+      <div class="hint">Leave the password empty for an open network. The
+        controller is 2.4&nbsp;GHz only — a 5&nbsp;GHz network will not appear
+        in the scan and cannot be joined.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Hostname</div>
+    <div class="card-body">
+      <label for="host">mDNS hostname</label>
+      <input type="text" id="host" autocomplete="off" spellcheck="false"
+             maxlength="32" placeholder="reflow">
+      <div class="hint">Reachable at <code id="host-preview">reflow.local</code>.
+        Lowercase letters, digits and hyphens only, up to 32 characters.</div>
+    </div>
+  </div>
+
+  <button class="btn btn-primary btn-wide" id="btn-save" onclick="save()">
+    Save &amp; reboot
+  </button>
+  <div id="msg"></div>
+  <div class="hint" style="margin-top:10px">
+    Saving reboots the controller. If it joins your Wi-Fi it will no longer be
+    at 192.168.4.1 — reach it at its hostname instead. If it cannot join, it
+    reopens the <strong>Reflow-Setup</strong> access point.
+  </div>
+</main>
+
+<script>
+function show(text, kind) {
+  const m = document.getElementById('msg');
+  m.textContent = text;
+  m.className = 'show ' + kind;
+}
+
+function load() {
+  fetch('/api/wifi/config').then(r => r.json()).then(c => {
+    document.getElementById('c-mode').textContent =
+      c.mode === 'sta' ? 'Connected (STA)' : 'Setup access point';
+    document.getElementById('c-ip').textContent   = c.ip || '192.168.4.1';
+    document.getElementById('c-ssid').textContent = c.ssid || '—';
+    document.getElementById('c-host').textContent = (c.hostname || 'reflow') + '.local';
+    document.getElementById('host').value = c.hostname || '';
+    document.getElementById('ssid').value = c.ssid || '';
+    preview();
+  }).catch(() => show('Could not read current configuration.', 'err'));
+}
+
+function preview() {
+  const v = document.getElementById('host').value.trim() || 'reflow';
+  document.getElementById('host-preview').textContent = v + '.local';
+}
+document.addEventListener('input', e => { if (e.target.id === 'host') preview(); });
+
+function scan() {
+  const btn  = document.getElementById('btn-scan');
+  const list = document.getElementById('scan-list');
+  btn.disabled = true;
+  btn.textContent = 'Scanning…';
+  list.innerHTML = '';
+  fetch('/api/wifi/scan').then(r => r.json()).then(aps => {
+    list.innerHTML = '';
+    if (!aps.length) { list.innerHTML = '<div><span>No networks found</span></div>'; return; }
+    aps.sort((a, b) => b.rssi - a.rssi).forEach(ap => {
+      const d = document.createElement('div');
+      const n = document.createElement('span');
+      n.textContent = ap.ssid;
+      const s = document.createElement('span');
+      s.style.color = 'var(--faint)';
+      s.textContent = 'ch ' + ap.ch + ' · ' + ap.rssi + ' dBm';
+      d.append(n, s);
+      d.onclick = () => { document.getElementById('ssid').value = ap.ssid;
+                          document.getElementById('pass').focus(); };
+      list.appendChild(d);
+    });
+  }).catch(() => show('Scan failed. In setup mode a scan briefly drops this '
+                    + 'connection — reload the page and try again.', 'err'))
+    .finally(() => { btn.disabled = false; btn.textContent = 'Scan networks'; });
+}
+
+function save() {
+  const ssid = document.getElementById('ssid').value.trim();
+  const pass = document.getElementById('pass').value;
+  const host = document.getElementById('host').value.trim();
+
+  if (!ssid && !host) { show('Enter a network name or a hostname.', 'err'); return; }
+  if (host && !/^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(host)) {
+    show('Hostname must be lowercase letters, digits and hyphens, and cannot '
+       + 'start or end with a hyphen.', 'err');
+    return;
+  }
+
+  const body = {};
+  if (ssid) { body.ssid = ssid; body.password = pass; }
+  if (host) body.hostname = host;
+
+  const btn = document.getElementById('btn-save');
+  btn.disabled = true;
+  fetch('/api/wifi/credentials', {
+    method: 'POST', body: JSON.stringify(body),
+    headers: { 'Content-Type': 'application/json' }
+  }).then(r => r.json()).then(res => {
+    if (res.ok) show('Saved. Rebooting — reach the controller at '
+                   + (host || 'reflow') + '.local once it has rejoined.', 'ok');
+    else { show(res.error || 'Could not save.', 'err'); btn.disabled = false; }
+  }).catch(() => {
+    /* The reboot usually kills the response before it arrives, which is not
+       an error — the settings were already committed to NVS. */
+    show('Saved. Rebooting…', 'ok');
+  });
+}
+
+load();
+</script>

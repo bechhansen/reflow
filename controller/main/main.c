@@ -12,6 +12,7 @@
 
 #include "temperature.h"
 #include "zigbee_plug.h"
+#include "plug_ctrl.h"
 #include "reflow_profile.h"
 #include "reflow_ctrl.h"
 #include "wifi_manager.h"
@@ -26,7 +27,8 @@ static const char *TAG = "main";
 
 static void console_task(void *arg)
 {
-    static const char *HELP = "Commands: start <profile>, stop, status, wifi, wifi-scan, wifi-clear\r\n";
+    static const char *HELP = "Commands: start <profile>, stop, status, plug on|off|toggle|status, "
+                              "wifi, wifi-scan, wifi-clear\r\n";
     char line[128];
     printf("\r\nReflow console ready. %s", HELP);
     while (fgets(line, sizeof(line), stdin)) {
@@ -50,9 +52,21 @@ static void console_task(void *arg)
             ctrl_status_t st;
             reflow_ctrl_get_status(&st);
             static const char *state_names[] = {"idle", "running", "complete", "error"};
-            printf("state=%s temp=%.1f setpoint=%.1f elapsed=%ds phase=%s duty=%d/4\r\n",
-                   state_names[st.state], (double)st.temp, (double)st.setpoint,
-                   st.elapsed_s, st.phase, st.duty_steps);
+            printf("state=%s temp=%.1f ambient=%.1f sensor=%s\r\n",
+                   state_names[st.state], (double)st.temp, (double)st.ambient,
+                   st.sensor_ok ? "ok" : "fault");
+        } else if (strcmp(line, "plug status") == 0) {
+            plug_status_t ps;
+            plug_ctrl_get_status(&ps);
+            printf("available=%s state=%s pending=%s\r\n",
+                   ps.available ? "yes" : "no", plug_state_str(ps.state),
+                   ps.pending ? (ps.target ? "->on" : "->off") : "no");
+        } else if (strcmp(line, "plug on") == 0 || strcmp(line, "plug off") == 0 ||
+                   strcmp(line, "plug toggle") == 0) {
+            esp_err_t e = strcmp(line, "plug toggle") == 0 ? plug_ctrl_toggle()
+                        : plug_ctrl_set(strcmp(line, "plug on") == 0);
+            if (e == ESP_OK) printf("Requested; awaiting confirmation\r\n");
+            else             printf("Rejected: %s\r\n", plug_ctrl_err_reason(e));
         } else if (strcmp(line, "wifi") == 0) {
             char ip[20] = {};
             wifi_manager_get_ip(ip, sizeof(ip));
@@ -107,6 +121,10 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Initialising reflow controller...");
     ESP_ERROR_CHECK(reflow_ctrl_init());
+
+    /* Before the web server (which subscribes to plug results) and Zigbee
+       (which delivers the plug events). */
+    ESP_ERROR_CHECK(plug_ctrl_init());
 
     ESP_LOGI(TAG, "Initialising Wi-Fi...");
     ESP_ERROR_CHECK(wifi_manager_init());

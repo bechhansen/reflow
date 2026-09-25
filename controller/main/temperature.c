@@ -4,6 +4,7 @@
 #include "esp_check.h"
 
 #define MLX_ADDR     0x5A
+#define MLX_REG_TA          0x06
 #define MLX_REG_TOBJ 0x07
 #define I2C_FREQ_HZ  100000
 #define I2C_TIMEOUT  50
@@ -47,11 +48,13 @@ static uint8_t smbus_crc8(uint8_t init, const uint8_t *data, size_t len)
     return crc;
 }
 
-esp_err_t temperature_read(float *celsius)
+/* Read one 16-bit MLX90614 RAM register over SMBus, PEC-verified.
+   Shared by the object (Tobj1, 0x07) and ambient (Ta, 0x06) channels — both use
+   the identical frame format and 0.02 K/LSB Kelvin scaling. */
+static esp_err_t mlx_read_temp_reg(uint8_t reg, float *celsius)
 {
     if (!s_dev) return ESP_ERR_INVALID_STATE;
 
-    uint8_t reg = MLX_REG_TOBJ;
     uint8_t buf[3]; /* data_lo, data_hi, pec */
 
     esp_err_t err = i2c_master_transmit_receive(s_dev, &reg, 1, buf, sizeof(buf), I2C_TIMEOUT);
@@ -61,7 +64,7 @@ esp_err_t temperature_read(float *celsius)
         return err;
     }
 
-    ESP_LOGI(TAG, "raw bytes: 0x%02x 0x%02x 0x%02x (pec)", buf[0], buf[1], buf[2]);
+    ESP_LOGD(TAG, "raw bytes: 0x%02x 0x%02x 0x%02x (pec)", buf[0], buf[1], buf[2]);
 
     /* Verify SMBus PEC over: [SLA_W, reg, SLA_R, data_lo, data_hi] */
     uint8_t pec_data[] = { MLX_ADDR << 1, reg, (MLX_ADDR << 1) | 1, buf[0], buf[1] };
@@ -78,6 +81,19 @@ esp_err_t temperature_read(float *celsius)
     }
 
     *celsius = (float)(raw & 0x7FFF) * 0.02f - 273.15f;
-    ESP_LOGI(TAG, "%.2f °C  (raw=0x%04x)", (double)*celsius, raw);
+    ESP_LOGD(TAG, "reg 0x%02x: %.2f °C  (raw=0x%04x)", reg, (double)*celsius, raw);
     return ESP_OK;
+}
+
+esp_err_t temperature_read(float *celsius)
+{
+    return mlx_read_temp_reg(MLX_REG_TOBJ, celsius);
+}
+
+/* Ambient (die) temperature. This is the sensor's own body temperature, not the
+   soleplate: the MLX90614ESF is only rated to +85 °C ambient, so it doubles as a
+   warning that the bracket is letting the sensor cook. */
+esp_err_t temperature_read_ambient(float *celsius)
+{
+    return mlx_read_temp_reg(MLX_REG_TA, celsius);
 }

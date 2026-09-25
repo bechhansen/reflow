@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DIY reflow hotplate controller. An old clothes iron (inverted, soleplate up) is the heat source. An ESP32-C6 coordinates a Zigbee smart wall plug to toggle heat on/off, reads temperature from an MLX90614ESF IR sensor over I2C, and serves a real-time web UI over Wi-Fi.
+DIY reflow hotplate controller. An old clothes iron (inverted, soleplate up) is the heat source. An ESP32-C6 pairs with a Zigbee smart wall plug, reads temperature from an MLX90614ESF IR sensor over I2C, and serves a real-time web UI over Wi-Fi.
+
+**The reflow control algorithm has been removed.** The firmware currently reads and reports temperature, manages reflow profiles, and handles Zigbee pairing and Wi-Fi. Nothing drives the relay: `reflow_ctrl_start()` and `reflow_ctrl_stop()` are empty stubs, kept so the UI's Start and Stop buttons remain wired to something that exists.
 
 ## Repository Structure
 
@@ -28,8 +30,8 @@ Reflow/
 ## Build & Flash Commands
 
 ```bash
-# Source ESP-IDF (installed at ~/esp/esp-idf)
-. ~/esp/esp-idf/export.sh
+# Source ESP-IDF 6.1 (installed at ~/esp/esp-idf-v6.1)
+. ~/esp/esp-idf-v6.1/export.sh
 
 cd controller
 
@@ -60,19 +62,54 @@ All source lives in `controller/main/`. Key modules:
 |------|---------------|
 | `main.c` | `app_main()`: init sequence, boot log |
 | `temperature.c/h` | MLX90614 I2C driver (register 0x07, SMBus read) |
-| `zigbee_plug.c/h` | Zigbee coordinator task, on/off commands, NVS pairing |
-| `reflow_profile.c/h` | JSON profile load/save from SPIFFS, linear interpolation |
-| `reflow_ctrl.c/h` | PID control loop + relay cycle task |
+| `zigbee_plug.c/h` | Zigbee transport: coordinator task, NVS pairing, raw On/Off command + OnOff attribute read, listener callbacks |
+| `plug_fsm.c/h` | Pure plug state machine (pending / confirm-by-read / retry / Unknown). No ESP-IDF deps; host-tested |
+| `plug_ctrl.c/h` | Plug service: the only thing that switches the plug. Wraps `plug_fsm` in Zigbee context, publishes a lock-free status snapshot |
+| `reflow_curve.h` | Waypoint table types. No ESP-IDF deps |
+| `reflow_profile.c/h` | JSON profile load/save from SPIFFS, on top of `reflow_curve` |
+| `reflow_ctrl.c/h` | Sensor shell: polls the MLX90614 for telemetry, holds run state. Start/stop are empty stubs |
 | `web_server.c/h` | HTTP server, WebSocket broadcast, REST API |
 | `wifi_manager.c/h` | STA with AP fallback, NVS credential storage |
 
 ### Control Algorithm
 
-Time-proportional PID with an 8-second cycle. The relay has a ≥ 2 s minimum switching period, giving 5 valid duty levels (0 / 25 / 50 / 75 / 100 %). A `relay_cycle_task` runs continuously; a `run_task` is spawned per reflow run and self-deletes on completion. Force 100 % when setpoint − temp > 10 °C; hand off to PID within 10 °C.
+Removed. `reflow_algo.c/h` (model feedforward + PI trim with a delta-sigma
+output stage) and the `controller/sim/` scoring harness have both been deleted.
+`reflow_ctrl.c` is now a sensor shell: it polls the MLX90614 every 500 ms so
+temperature telemetry keeps flowing, and holds the run state the UI reads.
+
+Nothing temperature-driven commands the plug. A future control algorithm
+should switch it only through `plug_ctrl_set()`, check `plug_ctrl_get_status()`
+for the confirmed state, and subscribe with `plug_ctrl_add_result_cb()`.
 
 ### Zigbee
 
 The Zigbee stack runs in its own FreeRTOS task (`esp_zb_stack_main_loop()`). All calls to `esp_zb_*` APIs from other tasks must use `esp_zb_lock_acquire(portMAX_DELAY)` / `esp_zb_lock_release()`. The device acts as a coordinator (`ESP_ZB_ZC_CONFIG()`). Pairing opens a permit-join window; the `ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE` handler calls `esp_zb_zdo_find_on_off_light()` to identify the plug endpoint.
+
+### Plug service
+
+`plug_ctrl.c` is the only code that switches the plug (UI test toggle, console
+`plug on|off|toggle|status`, and in future a control algorithm). A change is
+**pending** until a Read Attributes response for OnOff reports the target
+value. Requests made while a change is pending are rejected (`ESP_ERR_INVALID_STATE`).
+Retry policy: 200 ms settle, then a read every 200 ms for up to 10 reads (~2 s).
+A reply to any read of the sequence counts. An old-state reply is not a
+mismatch until the sequence runs out; then the command is resent once. With no
+reply at all the state becomes `PLUG_UNKNOWN`. Polling: every 10 s while
+idle, every 1 s while Unknown. Measured: 0.5–1.5 s from command to confirmation.
+
+Why reads are so frequent: Wi-Fi owns the shared radio most of the time, and
+the plug's replies are reliably received only right after we transmit. Raising
+the 802.15.4 coexistence priority did not help and can kill Wi-Fi; the
+measurements are recorded in `zigbee_plug.c`. Do not shorten the settle or the
+interval without re-measuring: 50 ms settle and a 100 ms interval were both
+worse.
+The decision logic lives in the pure `plug_fsm.c`; test it on the host with
+`make -C controller/test/plug_fsm test`.
+
+The FSM is only touched in Zigbee context (listener callbacks and scheduler
+alarms run in the Zigbee task; public calls take `esp_zb_lock`). Readers
+elsewhere use the spinlock-guarded snapshot from `plug_ctrl_get_status()`.
 
 ### WebSocket
 
@@ -107,10 +144,18 @@ Profiles are stored in SPIFFS at `/spiffs/profiles/<name>.json`. Default profile
 
 **Device → browser (2 Hz telemetry):**
 ```json
-{ "type":"telemetry", "temp":142.5, "setpoint":145.0, "elapsed":45, "phase":"Soak",
-  "state":"running", "plug_paired":true, "plug_on":true, "duty_steps":3,
-  "wifi_mode":"sta", "ip":"192.168.1.42" }
+{ "type":"telemetry", "temp":142.5, "ambient":31.2, "state":"idle",
+  "sensor_ok":true, "plug_paired":true, "plug_available":true,
+  "plug_state":"off", "plug_pending":false, "profile":"",
+  "wifi_mode":"sta", "ip":"192.168.1.42", "hostname":"reflow" }
 ```
+`plug_state` is `"unknown" | "off" | "on"`, and is always a state the plug confirmed.
+
+**Device → browser (plug change finished, or `plug_toggle` rejected — the latter to the sender only):**
+```json
+{ "type":"plug_result", "ok":false, "state":"unknown", "reason":"timeout" }
+```
+`reason`: `timeout`, `mismatch`, `unpaired` (finished) or `busy`, `unknown`, `not_paired`, `unavailable` (rejected).
 
 **Browser → device:**
 ```json
@@ -118,6 +163,7 @@ Profiles are stored in SPIFFS at `/spiffs/profiles/<name>.json`. Default profile
 { "type": "stop" }
 { "type": "start_pairing" }
 { "type": "unpair" }
+{ "type": "plug_toggle" }
 ```
 
 ## Hardware Defaults (configurable via `idf.py menuconfig`)

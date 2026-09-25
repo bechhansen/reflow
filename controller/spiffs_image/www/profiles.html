@@ -1,0 +1,334 @@
+<!-- Reflow profile management and editing. Separate page like the network
+     settings: it is an occasional editing task, needs no WebSocket, and the
+     dashboard's fixed-viewport layout is a poor fit for a table you add rows
+     to. Firmware limits mirrored here: 16 waypoints, name 63 chars,
+     description 127 chars, label 31 chars, whole file under 4 kB. -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Profiles — Reflow</title>
+<style>
+:root{
+  --bg:#f4f3f0; --surface:#fff; --border:#e3e0da; --text:#1a1a1a;
+  --muted:#737373; --faint:#a3a3a3; --red:#b4232b; --amber:#a87020;
+  --orange:#c2410c; --shadow:0 1px 2px rgba(0,0,0,.06);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font-family:system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+header{display:flex;align-items:center;gap:10px;height:52px;padding:0 14px;
+  background:var(--surface);border-bottom:1px solid var(--border)}
+header h1{font-size:.95rem;font-weight:500;margin:0}
+a.back{color:var(--muted);text-decoration:none;font-size:.82rem}
+a.back:hover{color:var(--text)}
+main{max-width:640px;margin:0 auto;padding:14px 14px 40px}
+.card{background:var(--surface);border-radius:6px;box-shadow:var(--shadow);
+  margin-bottom:12px;overflow:hidden}
+.card-header{padding:9px 14px;border-bottom:1px solid var(--border);
+  font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+.card-body{padding:12px 14px 14px}
+label{display:block;font-size:.72rem;font-weight:500;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--faint);margin:10px 0 4px}
+input,textarea{width:100%;padding:7px 9px;font-size:.86rem;font-family:inherit;
+  border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text)}
+input:focus,textarea:focus{outline:none;border-color:var(--muted)}
+.btn{padding:7px 12px;font-size:.8rem;font-weight:500;font-family:inherit;
+  border:1px solid var(--border);border-radius:4px;background:var(--surface);
+  color:var(--text);cursor:pointer;min-height:34px}
+.btn:hover:not(:disabled){border-color:var(--muted)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn-primary{border-color:var(--text)}
+.btn-danger{color:var(--red);border-color:var(--red)}
+.btn-small{padding:3px 8px;min-height:auto;font-size:.72rem}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.hint{font-size:.72rem;color:var(--faint);line-height:1.45;margin-top:6px}
+#list div{display:flex;justify-content:space-between;align-items:center;gap:8px;
+  padding:7px 10px;font-size:.84rem;border-bottom:1px solid var(--border)}
+#list div:last-child{border-bottom:none}
+#list .nm{cursor:pointer;flex:1}
+#list .nm:hover{color:var(--orange)}
+#list .cur{font-weight:600;color:var(--orange)}
+table{width:100%;border-collapse:collapse;font-size:.82rem}
+th{text-align:left;font-size:.66rem;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--faint);font-weight:600;padding:4px 4px}
+td{padding:2px 4px}
+td input{padding:5px 6px;font-size:.82rem}
+td.num input{text-align:right;font-variant-numeric:tabular-nums}
+#msg{margin-top:10px;padding:8px 10px;border-radius:4px;font-size:.78rem;
+  line-height:1.45;display:none}
+#msg.show{display:block}
+#msg.err{background:#fef2f2;border:1px solid var(--red);color:var(--red)}
+#msg.ok{background:#f0fdf4;border:1px solid #2e7d32;color:#2e7d32}
+svg{display:block;width:100%;height:170px;background:var(--bg);border-radius:4px}
+.summary{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:.76rem;margin-top:10px}
+.summary dt{color:var(--muted)}
+.summary dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+</style>
+
+<header>
+  <a class="back" href="/">&larr; Back</a>
+  <h1>Reflow profiles</h1>
+</header>
+
+<main>
+  <div class="card">
+    <div class="card-header">
+      <span>Stored profiles</span>
+      <button class="btn btn-small" onclick="newProfile()">New</button>
+    </div>
+    <div class="card-body" style="padding:0">
+      <div id="list"><div><span class="nm">Loading…</span></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span id="editing">Editor</span></div>
+    <div class="card-body">
+      <svg id="chart" viewBox="0 0 600 170" preserveAspectRatio="none"></svg>
+      <dl class="summary">
+        <dt>Peak</dt>            <dd id="s-peak">—</dd>
+        <dt>Total time</dt>      <dd id="s-total">—</dd>
+        <dt>Max ramp rate</dt>   <dd id="s-ramp">—</dd>
+        <dt>Above 217 °C</dt>    <dd id="s-tal">—</dd>
+      </dl>
+
+      <label for="p-name">Name</label>
+      <input type="text" id="p-name" maxlength="48" spellcheck="false" oninput="redraw()">
+      <label for="p-desc">Description</label>
+      <textarea id="p-desc" rows="2" maxlength="127"></textarea>
+
+      <label>Waypoints</label>
+      <table>
+        <thead><tr><th style="width:5.5em">Time (s)</th><th style="width:5.5em">Temp (°C)</th>
+                   <th>Label</th><th style="width:2.2em"></th></tr></thead>
+        <tbody id="wps"></tbody>
+      </table>
+      <div class="row" style="margin-top:8px">
+        <button class="btn btn-small" onclick="addRow()">Add waypoint</button>
+        <span class="hint" style="margin:0;align-self:center" id="wp-count"></span>
+      </div>
+
+      <div class="row" style="margin-top:14px">
+        <button class="btn btn-primary" onclick="save()" style="flex:1">Save profile</button>
+        <button class="btn btn-danger" onclick="del()" id="btn-del">Delete</button>
+      </div>
+      <div id="msg"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span>Upload</span></div>
+    <div class="card-body">
+      <input type="file" id="file" accept=".json">
+      <div class="row" style="margin-top:8px">
+        <button class="btn" onclick="upload()" style="flex:1">Upload .json file</button>
+      </div>
+      <div class="hint">The file's <code>name</code> field becomes the profile
+        name. Uploading a profile whose name already exists replaces it.</div>
+    </div>
+  </div>
+</main>
+
+<script>
+const NAME_RE = /^[A-Za-z0-9 ._()-]{1,48}$/;
+let current = null;          /* name as stored on the device, null when new */
+
+function show(t, k) { const m = document.getElementById('msg'); m.textContent = t; m.className = 'show ' + k; }
+function clearMsg() { document.getElementById('msg').className = ''; }
+
+/* ── list ── */
+function loadList() {
+  fetch('/api/profiles').then(r => r.json()).then(names => {
+    const el = document.getElementById('list');
+    el.innerHTML = '';
+    if (!names.length) { el.innerHTML = '<div><span class="nm">No profiles stored</span></div>'; return; }
+    names.sort().forEach(n => {
+      const d = document.createElement('div');
+      const s = document.createElement('span');
+      s.className = 'nm' + (n === current ? ' cur' : '');
+      s.textContent = n;
+      s.onclick = () => load(n);
+      const b = document.createElement('button');
+      b.className = 'btn btn-small';
+      b.textContent = 'Edit';
+      b.onclick = () => load(n);
+      d.append(s, b);
+      el.appendChild(d);
+    });
+  }).catch(() => show('Could not list profiles.', 'err'));
+}
+
+function load(name) {
+  fetch('/api/profiles/' + encodeURIComponent(name)).then(r => r.json()).then(p => {
+    current = name;
+    document.getElementById('p-name').value = p.name || name;
+    document.getElementById('p-desc').value = p.description || '';
+    const tb = document.getElementById('wps');
+    tb.innerHTML = '';
+    (p.waypoints || []).forEach(w => addRow(w.time, w.temp, w.label));
+    document.getElementById('editing').textContent = 'Editing: ' + name;
+    document.getElementById('btn-del').disabled = false;
+    clearMsg(); redraw(); loadList();
+  }).catch(() => show('Could not load "' + name + '".', 'err'));
+}
+
+function newProfile() {
+  current = null;
+  document.getElementById('p-name').value = '';
+  document.getElementById('p-desc').value = '';
+  document.getElementById('wps').innerHTML = '';
+  addRow(0, 25, 'Start'); addRow(90, 150, 'Preheat');
+  addRow(180, 180, 'Soak'); addRow(240, 235, 'Peak'); addRow(330, 50, 'Cool');
+  document.getElementById('editing').textContent = 'New profile';
+  document.getElementById('btn-del').disabled = true;
+  clearMsg(); redraw(); loadList();
+}
+
+/* ── waypoint rows ── */
+function addRow(t, c, l) {
+  const tb = document.getElementById('wps');
+  if (tb.children.length >= 16) { show('16 waypoints is the firmware limit.', 'err'); return; }
+  const tr = document.createElement('tr');
+  tr.innerHTML =
+    '<td class="num"><input type="number" class="wt" min="0" max="7200" step="1"></td>' +
+    '<td class="num"><input type="number" class="wc" min="0" max="400" step="1"></td>' +
+    '<td><input type="text" class="wl" maxlength="31" spellcheck="false"></td>' +
+    '<td><button class="btn btn-small" title="Remove">&times;</button></td>';
+  tr.querySelector('.wt').value = t ?? '';
+  tr.querySelector('.wc').value = c ?? '';
+  tr.querySelector('.wl').value = l ?? '';
+  tr.querySelectorAll('input').forEach(i => i.addEventListener('input', redraw));
+  tr.querySelector('button').onclick = () => { tr.remove(); redraw(); };
+  tb.appendChild(tr);
+  redraw();
+}
+
+function readWaypoints() {
+  return Array.from(document.querySelectorAll('#wps tr')).map(tr => ({
+    time: parseInt(tr.querySelector('.wt').value, 10),
+    temp: parseFloat(tr.querySelector('.wc').value),
+    label: tr.querySelector('.wl').value.trim()
+  }));
+}
+
+/* ── preview + derived figures ── */
+function redraw() {
+  const wps = readWaypoints().filter(w => Number.isFinite(w.time) && Number.isFinite(w.temp));
+  document.getElementById('wp-count').textContent =
+    document.querySelectorAll('#wps tr').length + ' of 16 waypoints';
+  const svg = document.getElementById('chart');
+  if (wps.length < 2) { svg.innerHTML = ''; ['s-peak','s-total','s-ramp','s-tal']
+    .forEach(i => document.getElementById(i).textContent = '—'); return; }
+
+  const tMax = Math.max(...wps.map(w => w.time)) || 1;
+  const cMax = Math.max(240, Math.max(...wps.map(w => w.temp)));
+  const X = t => 34 + (t / tMax) * 556;
+  const Y = c => 156 - (c / cMax) * 142;
+
+  let g = '';
+  /* liquidus reference for lead-free paste */
+  g += `<line x1="34" y1="${Y(217).toFixed(1)}" x2="590" y2="${Y(217).toFixed(1)}"
+         stroke="#b4232b" stroke-width="1" stroke-dasharray="4 3" opacity=".55"/>`;
+  g += `<text x="37" y="${(Y(217)-4).toFixed(1)}" font-size="9" fill="#b4232b">217 °C liquidus</text>`;
+  const pts = wps.map(w => `${X(w.time).toFixed(1)},${Y(w.temp).toFixed(1)}`).join(' ');
+  g += `<polyline points="${pts}" fill="none" stroke="#c2410c" stroke-width="2"/>`;
+  wps.forEach(w => { g += `<circle cx="${X(w.time).toFixed(1)}" cy="${Y(w.temp).toFixed(1)}" r="2.6" fill="#c2410c"/>`; });
+  g += `<line x1="34" y1="156" x2="590" y2="156" stroke="#a3a3a3" stroke-width="1"/>`;
+  g += `<text x="2" y="${Y(cMax)+9}" font-size="9" fill="#a3a3a3">${cMax.toFixed(0)}</text>`;
+  g += `<text x="2" y="154" font-size="9" fill="#a3a3a3">0</text>`;
+  g += `<text x="570" y="168" font-size="9" fill="#a3a3a3">${tMax}s</text>`;
+  svg.innerHTML = g;
+
+  const sorted = [...wps].sort((a,b) => a.time - b.time);
+  let ramp = 0;
+  for (let i = 1; i < sorted.length; i++) {
+    const dt = sorted[i].time - sorted[i-1].time;
+    if (dt > 0) ramp = Math.max(ramp, Math.abs(sorted[i].temp - sorted[i-1].temp) / dt);
+  }
+  /* time above liquidus, by interpolation */
+  let tal = 0;
+  for (let i = 1; i < sorted.length; i++) {
+    const [a, b] = [sorted[i-1], sorted[i]];
+    const dt = b.time - a.time; if (dt <= 0) continue;
+    for (let s = 0; s < dt; s++) {
+      const v = a.temp + (b.temp - a.temp) * (s / dt);
+      if (v >= 217) tal++;
+    }
+  }
+  document.getElementById('s-peak').textContent  = Math.max(...wps.map(w => w.temp)).toFixed(0) + ' °C';
+  document.getElementById('s-total').textContent = tMax + ' s';
+  document.getElementById('s-ramp').textContent  = ramp.toFixed(2) + ' °C/s';
+  document.getElementById('s-tal').textContent   = tal + ' s';
+}
+
+/* ── save / delete / upload ── */
+function validate(name, wps) {
+  if (!NAME_RE.test(name)) return 'Name must be 1–48 characters, letters, digits, spaces, . _ - ( ) only.';
+  if (wps.length < 2)      return 'A profile needs at least two waypoints.';
+  if (wps.length > 16)     return '16 waypoints is the firmware limit.';
+  for (const w of wps) {
+    if (!Number.isFinite(w.time) || !Number.isFinite(w.temp)) return 'Every waypoint needs a time and a temperature.';
+    if (w.time < 0 || w.temp < 0 || w.temp > 400) return 'Times must be positive and temperatures 0–400 °C.';
+  }
+  for (let i = 1; i < wps.length; i++)
+    if (wps[i].time <= wps[i-1].time)
+      return 'Waypoint times must increase down the list (row ' + (i+1) + ' is not after row ' + i + ').';
+  return null;
+}
+
+function save() {
+  const name = document.getElementById('p-name').value.trim();
+  const wps  = readWaypoints();
+  const err  = validate(name, wps);
+  if (err) { show(err, 'err'); return; }
+
+  /* Lookup on the device is by FILENAME, so keep the name field identical to
+     avoid a profile that lists under one name and reports another. */
+  const body = { name, description: document.getElementById('p-desc').value.trim(), waypoints: wps };
+  fetch('/api/profiles/' + encodeURIComponent(name), {
+    method: 'POST', body: JSON.stringify(body),
+    headers: { 'Content-Type': 'application/json' }
+  }).then(() => {
+    /* Renaming writes a new file; remove the old one so it is a rename, not a copy. */
+    if (current && current !== name)
+      return fetch('/api/profiles/' + encodeURIComponent(current), { method: 'DELETE' });
+  }).then(() => {
+    current = name;
+    show('Saved "' + name + '".', 'ok');
+    document.getElementById('editing').textContent = 'Editing: ' + name;
+    document.getElementById('btn-del').disabled = false;
+    loadList();
+  }).catch(() => show('Could not save.', 'err'));
+}
+
+function del() {
+  if (!current) return;
+  if (!confirm('Delete "' + current + '"?')) return;
+  fetch('/api/profiles/' + encodeURIComponent(current), { method: 'DELETE' })
+    .then(() => { show('Deleted "' + current + '".', 'ok'); current = null; newProfile(); })
+    .catch(() => show('Could not delete.', 'err'));
+}
+
+function upload() {
+  const f = document.getElementById('file').files[0];
+  if (!f) { show('Choose a .json file first.', 'err'); return; }
+  const rd = new FileReader();
+  rd.onload = e => {
+    let p;
+    try { p = JSON.parse(e.target.result); }
+    catch { show('That file is not valid JSON.', 'err'); return; }
+    const name = (p.name || f.name.replace(/\.json$/i, '')).trim();
+    const err = validate(name, p.waypoints || []);
+    if (err) { show('Rejected: ' + err, 'err'); return; }
+    fetch('/api/profiles/' + encodeURIComponent(name), {
+      method: 'POST', body: JSON.stringify(p),
+      headers: { 'Content-Type': 'application/json' }
+    }).then(() => { show('Uploaded "' + name + '".', 'ok'); loadList(); load(name); })
+      .catch(() => show('Upload failed.', 'err'));
+  };
+  rd.readAsText(f);
+}
+
+loadList();
+newProfile();
+</script>

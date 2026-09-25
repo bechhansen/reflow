@@ -2,6 +2,7 @@
 #include "reflow_ctrl.h"
 #include "reflow_profile.h"
 #include "zigbee_plug.h"
+#include "plug_ctrl.h"
 #include "wifi_manager.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -15,6 +16,9 @@
 #include <stdio.h>
 
 #define MAX_WS_CLIENTS   4
+/* Must match cfg.max_open_sockets below: httpd_get_client_list() needs an array
+   sized for every socket the server may hold open. */
+#define HTTPD_MAX_OPEN_SOCKETS 10
 #define MAX_RESP_BUF     4096
 #define TELEMETRY_HZ     2
 #define PAIR_DURATION_S  60
@@ -30,20 +34,29 @@ static esp_timer_handle_t s_telemetry_timer;
 
 static void ws_client_add(int fd)
 {
+    int slot = -1, count = 0;
     xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
     for (int i = 0; i < MAX_WS_CLIENTS; i++) {
-        if (s_ws_fds[i] == -1) { s_ws_fds[i] = fd; break; }
+        if (s_ws_fds[i] == -1 && slot == -1) { s_ws_fds[i] = fd; slot = i; }
     }
+    for (int i = 0; i < MAX_WS_CLIENTS; i++) if (s_ws_fds[i] != -1) count++;
     xSemaphoreGive(s_ws_mutex);
+    if (slot == -1) {
+        ESP_LOGW(TAG, "WS client fd=%d rejected — all %d slots busy", fd, MAX_WS_CLIENTS);
+    } else {
+        ESP_LOGI(TAG, "WS client connected fd=%d (slot %d, %d active)", fd, slot, count);
+    }
 }
 
 static void ws_client_remove(int fd)
 {
+    bool found = false;
     xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
     for (int i = 0; i < MAX_WS_CLIENTS; i++) {
-        if (s_ws_fds[i] == fd) { s_ws_fds[i] = -1; break; }
+        if (s_ws_fds[i] == fd) { s_ws_fds[i] = -1; found = true; break; }
     }
     xSemaphoreGive(s_ws_mutex);
+    if (found) ESP_LOGI(TAG, "WS client disconnected fd=%d", fd);
 }
 
 void web_server_broadcast(const char *json)
@@ -56,17 +69,26 @@ void web_server_broadcast(const char *json)
         .len     = strlen(json),
     };
 
-    xSemaphoreTake(s_ws_mutex, portMAX_DELAY);
-    for (int i = 0; i < MAX_WS_CLIENTS; i++) {
-        if (s_ws_fds[i] == -1) continue;
-        esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fds[i], &frame);
+    /* Enumerate httpd's own socket list rather than a list we maintain ourselves.
+       Under ESP-IDF 6.x the URI handler is NOT invoked for the WebSocket
+       handshake GET (that is now gated behind the opt-in pre/post-handshake
+       callbacks), so ws_client_add() never fires and a self-managed fd table
+       stays empty — telemetry then goes to nobody while the handshake still
+       succeeds. httpd_ws_get_fd_info() tells us which live sockets are
+       WebSockets, which works regardless of how the handshake was dispatched. */
+    size_t fd_count = HTTPD_MAX_OPEN_SOCKETS;
+    int    fds[HTTPD_MAX_OPEN_SOCKETS];
+
+    if (httpd_get_client_list(s_server, &fd_count, fds) != ESP_OK) return;
+
+    for (size_t i = 0; i < fd_count; i++) {
+        if (httpd_ws_get_fd_info(s_server, fds[i]) != HTTPD_WS_CLIENT_WEBSOCKET) continue;
+        esp_err_t err = httpd_ws_send_frame_async(s_server, fds[i], &frame);
         if (err != ESP_OK) {
-            ESP_LOGD(TAG, "WS client %d send failed (%s), closing", s_ws_fds[i], esp_err_to_name(err));
-            httpd_sess_trigger_close(s_server, s_ws_fds[i]);
-            s_ws_fds[i] = -1;
+            ESP_LOGW(TAG, "WS client %d send failed (%s), closing", fds[i], esp_err_to_name(err));
+            httpd_sess_trigger_close(s_server, fds[i]);
         }
     }
-    xSemaphoreGive(s_ws_mutex);
 }
 
 /* ── Telemetry ───────────────────────────────────────────────────────────── */
@@ -92,14 +114,25 @@ static void telemetry_cb(void *arg)
     cJSON *obj = cJSON_CreateObject();
     cJSON_AddStringToObject(obj, "type",        "telemetry");
     cJSON_AddNumberToObject(obj, "temp",        (double)st.temp);
-    cJSON_AddNumberToObject(obj, "setpoint",    (double)st.setpoint);
-    cJSON_AddNumberToObject(obj, "elapsed",     st.elapsed_s);
-    cJSON_AddStringToObject(obj, "phase",       st.phase);
+    cJSON_AddNumberToObject(obj, "ambient",     st.ambient);
     cJSON_AddStringToObject(obj, "state",       state_str(st.state));
     cJSON_AddBoolToObject  (obj, "sensor_ok",   st.sensor_ok);
     cJSON_AddBoolToObject  (obj, "plug_paired", zigbee_plug_is_paired());
-    cJSON_AddBoolToObject  (obj, "plug_on",     st.plug_on);
-    cJSON_AddNumberToObject(obj, "duty_steps",  st.duty_steps);
+    {
+        /* Confirmed plug state from the plug service: "unknown" until a read
+           has answered, and a pending change is not reported as done. */
+        plug_status_t ps;
+        plug_ctrl_get_status(&ps);
+        cJSON_AddBoolToObject  (obj, "plug_available", ps.available);
+        cJSON_AddStringToObject(obj, "plug_state",     plug_state_str(ps.state));
+        cJSON_AddBoolToObject  (obj, "plug_pending",   ps.pending);
+    }
+    cJSON_AddStringToObject(obj, "profile",     "");
+    {
+        char host[40];
+        wifi_manager_get_hostname(host, sizeof(host));
+        cJSON_AddStringToObject(obj, "hostname", host);
+    }
     cJSON_AddStringToObject(obj, "wifi_mode",
                             wifi_manager_get_mode() == WIFI_MGR_STA ? "sta" : "ap");
     cJSON_AddStringToObject(obj, "ip", ip);
@@ -125,6 +158,37 @@ static void pairing_result_cb(bool success, uint16_t addr, uint8_t ep)
     char *str = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
     if (str) { web_server_broadcast(str); free(str); }
+}
+
+/* ── Plug result callback (called from Zigbee task) ─────────────────────── */
+
+static void plug_result_cb(bool ok, plug_state_t state, const char *reason)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "type",  "plug_result");
+    cJSON_AddBoolToObject  (obj, "ok",    ok);
+    cJSON_AddStringToObject(obj, "state", plug_state_str(state));
+    if (reason) cJSON_AddStringToObject(obj, "reason", reason);
+    char *str = cJSON_PrintUnformatted(obj);
+    cJSON_Delete(obj);
+    if (str) { web_server_broadcast(str); free(str); }
+}
+
+/* A rejected request goes back to the client that asked, not to everyone. */
+static void ws_reply_plug_rejected(httpd_req_t *req, esp_err_t err)
+{
+    char buf[96];
+    plug_status_t ps;
+    plug_ctrl_get_status(&ps);
+    int n = snprintf(buf, sizeof(buf),
+                     "{\"type\":\"plug_result\",\"ok\":false,\"state\":\"%s\",\"reason\":\"%s\"}",
+                     plug_state_str(ps.state), plug_ctrl_err_reason(err));
+    httpd_ws_frame_t f = {
+        .type    = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)buf,
+        .len     = (size_t)n,
+    };
+    httpd_ws_send_frame(req, &f);
 }
 
 static void pairing_countdown_cb(uint8_t remaining)
@@ -196,11 +260,9 @@ static esp_err_t ws_handler(httpd_req_t *req)
         zigbee_plug_start_pairing(PAIR_DURATION_S, pairing_result_cb, pairing_countdown_cb);
     } else if (strcmp(t, "unpair") == 0) {
         zigbee_plug_unpair();
-    } else if (strcmp(t, "plug_set") == 0) {
-        cJSON *on_item = cJSON_GetObjectItem(msg, "on");
-        if (cJSON_IsBool(on_item)) {
-            reflow_ctrl_set_plug(cJSON_IsTrue(on_item));
-        }
+    } else if (strcmp(t, "plug_toggle") == 0) {
+        esp_err_t perr = plug_ctrl_toggle();
+        if (perr != ESP_OK) ws_reply_plug_rejected(req, perr);
     }
 
     cJSON_Delete(msg);
@@ -316,6 +378,30 @@ static esp_err_t api_wifi_scan(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t api_wifi_config_get(httpd_req_t *req)
+{
+    char ssid[64] = {0}, host[40] = {0}, ip[20] = {0};
+    wifi_manager_get_ssid(ssid, sizeof(ssid));
+    wifi_manager_get_hostname(host, sizeof(host));
+    wifi_manager_get_ip(ip, sizeof(ip));
+
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "ssid", ssid);
+    cJSON_AddStringToObject(obj, "hostname", host);
+    cJSON_AddStringToObject(obj, "mode",
+                            wifi_manager_get_mode() == WIFI_MGR_STA ? "sta" : "ap");
+    cJSON_AddStringToObject(obj, "ip", ip);
+
+    char *str = cJSON_PrintUnformatted(obj);
+    cJSON_Delete(obj);
+    if (!str) return httpd_resp_send_500(req);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, str);
+    free(str);
+    return ESP_OK;
+}
+
 static esp_err_t api_wifi_credentials_post(httpd_req_t *req)
 {
     char buf[256] = {0};
@@ -326,17 +412,32 @@ static esp_err_t api_wifi_credentials_post(httpd_req_t *req)
     cJSON *obj  = cJSON_Parse(buf);
     cJSON *ssid = cJSON_GetObjectItem(obj, "ssid");
     cJSON *pass = cJSON_GetObjectItem(obj, "password");
+    cJSON *host = cJSON_GetObjectItem(obj, "hostname");
 
-    if (!cJSON_IsString(ssid)) {
-        cJSON_Delete(obj);
-        httpd_resp_sendstr(req, "{\"ok\":false}");
+    /* Either field may be sent on its own: the settings page can change the
+       hostname without re-entering Wi-Fi credentials, and vice versa. */
+    bool did_ssid = false, did_host = false;
+    const char *host_err = NULL;
+
+    if (cJSON_IsString(ssid) && ssid->valuestring[0] != '\0') {
+        wifi_manager_set_credentials(ssid->valuestring,
+                                      cJSON_IsString(pass) ? pass->valuestring : "");
+        did_ssid = true;
+    }
+    if (cJSON_IsString(host) && host->valuestring[0] != '\0') {
+        if (wifi_manager_set_hostname(host->valuestring) == ESP_OK) did_host = true;
+        else host_err = "invalid hostname: use a-z, 0-9 and hyphens, max 32 chars";
+    }
+    cJSON_Delete(obj);
+
+    httpd_resp_set_type(req, "application/json");
+    if (!did_ssid && !did_host) {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "{\"ok\":false,\"error\":\"%s\"}",
+                 host_err ? host_err : "nothing to save");
+        httpd_resp_sendstr(req, msg);
         return ESP_OK;
     }
-
-    wifi_manager_set_credentials(ssid->valuestring,
-                                  cJSON_IsString(pass) ? pass->valuestring : "");
-    cJSON_Delete(obj);
-    httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true,\"rebooting\":true}");
 
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -415,10 +516,17 @@ esp_err_t web_server_start(void)
 {
     s_ws_mutex = xSemaphoreCreateMutex();
     for (int i = 0; i < MAX_WS_CLIENTS; i++) s_ws_fds[i] = -1;
+    plug_ctrl_add_result_cb(plug_result_cb);
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_open_sockets  = 7;   /* LWIP_MAX_SOCKETS(10) - 3 reserved by httpd */
-    cfg.max_uri_handlers  = 14;  /* default is 8, we register 11 handlers */
+    /* LWIP_MAX_SOCKETS is 16 (sdkconfig.defaults); httpd reserves 3 for itself.
+       lru_purge_enable is essential, not an optimisation: without it httpd
+       REFUSES new connections once every slot is held by a keep-alive socket,
+       and repeated page loads will starve the WebSocket upgrade — the UI then
+       sits on "connecting..." forever while plain GETs still succeed. */
+    cfg.max_open_sockets  = HTTPD_MAX_OPEN_SOCKETS;
+    cfg.lru_purge_enable  = true;
+    cfg.max_uri_handlers  = 16;  /* default is 8; we register 12 */
     cfg.uri_match_fn      = httpd_uri_match_wildcard;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "httpd start");
@@ -457,11 +565,16 @@ esp_err_t web_server_start(void)
         .uri = "/api/wifi/scan", .method = HTTP_GET,
         .handler = api_wifi_scan,
     };
+    static const httpd_uri_t wifi_config = {
+        .uri = "/api/wifi/config", .method = HTTP_GET,
+        .handler = api_wifi_config_get,
+    };
     static const httpd_uri_t wifi_creds = {
         .uri = "/api/wifi/credentials", .method = HTTP_POST,
         .handler = api_wifi_credentials_post,
     };
     httpd_register_uri_handler(s_server, &wifi_scan);
+    httpd_register_uri_handler(s_server, &wifi_config);
     httpd_register_uri_handler(s_server, &wifi_creds);
 
     /* Captive portal — must come before the catch-all static handler */

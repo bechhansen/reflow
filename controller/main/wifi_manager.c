@@ -16,14 +16,21 @@
 #define AP_CHANNEL       6
 #define AP_MAX_CONN      4
 #define STA_TIMEOUT_MS   15000
+#define STA_SCAN_ATTEMPTS 1   /* driver re-cycling does NOT clear the deaf receiver; see below */
 #define STA_RETRY_MAX    5
 #define NVS_NS           "wifi_cfg"
 #define NVS_KEY_SSID     "ssid"
 #define NVS_KEY_PASS     "password"
+#define NVS_KEY_HOST     "hostname"
+#define HOSTNAME_DEFAULT "reflow"
 
 static const char *TAG = "wifi_mgr";
 
 static EventGroupHandle_t s_wifi_events;
+
+/* Survives esp_restart() but is zeroed on power-on reset — exactly the
+   lifetime needed to allow one automatic reboot per cold boot. */
+RTC_DATA_ATTR static uint32_t s_sta_reboot_attempted;
 #define EVT_STA_GOT_IP    BIT0
 #define EVT_STA_FAILED    BIT1
 
@@ -57,13 +64,78 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *da
     }
 }
 
+/* Hostname is a DNS label: lowercase letters, digits and hyphens, not leading
+   or trailing with a hyphen. Anything else would make the .local name
+   unreachable, so reject rather than silently mangle. */
+static bool hostname_valid(const char *h)
+{
+    size_t n = strlen(h);
+    if (n == 0 || n > 32) return false;
+    if (h[0] == '-' || h[n - 1] == '-') return false;
+    for (size_t i = 0; i < n; i++) {
+        char c = h[i];
+        bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+/* Currently configured SSID (from NVS), for the settings page to display. */
+esp_err_t wifi_manager_get_ssid(char *buf, size_t len)
+{
+    if (!buf || len == 0) return ESP_ERR_INVALID_ARG;
+    buf[0] = '\0';
+
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NS, NVS_READONLY, &nvs) == ESP_OK) {
+        size_t sl = len;
+        nvs_get_str(nvs, NVS_KEY_SSID, buf, &sl);
+        nvs_close(nvs);
+    }
+    if (buf[0] == '\0' && strlen(CONFIG_REFLOW_WIFI_SSID) > 0)
+        strlcpy(buf, CONFIG_REFLOW_WIFI_SSID, len);
+    return ESP_OK;
+}
+
+esp_err_t wifi_manager_get_hostname(char *buf, size_t len)
+{
+    if (!buf || len == 0) return ESP_ERR_INVALID_ARG;
+    strlcpy(buf, HOSTNAME_DEFAULT, len);
+
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NS, NVS_READONLY, &nvs) == ESP_OK) {
+        char h[40] = {0};
+        size_t hl = sizeof(h);
+        if (nvs_get_str(nvs, NVS_KEY_HOST, h, &hl) == ESP_OK && hostname_valid(h))
+            strlcpy(buf, h, len);
+        nvs_close(nvs);
+    }
+    return ESP_OK;
+}
+
+esp_err_t wifi_manager_set_hostname(const char *hostname)
+{
+    if (!hostname || !hostname_valid(hostname)) return ESP_ERR_INVALID_ARG;
+
+    nvs_handle_t nvs;
+    ESP_RETURN_ON_ERROR(nvs_open(NVS_NS, NVS_READWRITE, &nvs), TAG, "nvs open");
+    nvs_set_str(nvs, NVS_KEY_HOST, hostname);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+    ESP_LOGI(TAG, "Hostname saved: %s", hostname);
+    return ESP_OK;
+}
+
 static void start_mdns(void)
 {
+    char host[40];
+    wifi_manager_get_hostname(host, sizeof(host));
+
     mdns_init();
-    mdns_hostname_set("reflow");
+    mdns_hostname_set(host);
     mdns_instance_name_set("Reflow Controller");
     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-    ESP_LOGI(TAG, "mDNS started — reflow.local");
+    ESP_LOGI(TAG, "mDNS started — %s.local", host);
 }
 
 static esp_err_t start_ap(void)
@@ -142,12 +214,27 @@ esp_err_t wifi_manager_init(void)
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start STA for scan");
     esp_wifi_set_ps(WIFI_PS_NONE);
 
-    {
+    /* Pre-connect scan, with recovery for a deaf receiver.
+
+       On a cold/hard reset the C6 receiver sometimes comes up hearing nothing:
+       this scan completes normally but reports 0 APs, and the subsequent
+       connect then fails with reason 201 (NO_AP_FOUND) on every retry, even
+       with a strong AP on channel 3. The same image connects immediately when
+       the boot came from a soft esp_restart(). Full RF calibration
+       (ESP_PHY_RF_CAL_FULL) does not prevent it.
+
+       Root cause unidentified; empirically, cycling the driver clears it. So
+       treat "0 APs" as a failed bring-up rather than an empty neighbourhood —
+       an environment with no 2.4 GHz networks at all would merely retry twice
+       and cost ~6 s before the connect attempt proceeds as normal. */
+    for (int attempt = 1; attempt <= STA_SCAN_ATTEMPTS; attempt++) {
         wifi_scan_config_t sc = { .scan_type = WIFI_SCAN_TYPE_ACTIVE };
-        if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
+        if (esp_wifi_scan_start(&sc, true) != ESP_OK) {
+            ESP_LOGW(TAG, "Scan failed (attempt %d/%d)", attempt, STA_SCAN_ATTEMPTS);
+        } else {
             uint16_t n = 0;
             esp_wifi_scan_get_ap_num(&n);
-            ESP_LOGI(TAG, "Scan found %u AP(s):", n);
+            ESP_LOGI(TAG, "Scan found %u AP(s) (attempt %d/%d):", n, attempt, STA_SCAN_ATTEMPTS);
             if (n > 0) {
                 if (n > 20) n = 20;
                 wifi_ap_record_t *recs = malloc(n * sizeof(wifi_ap_record_t));
@@ -158,10 +245,19 @@ esp_err_t wifi_manager_init(void)
                                  recs[i].rssi, recs[i].primary, (char *)recs[i].ssid);
                     free(recs);
                 }
+                break;          /* receiver is working — proceed to connect */
             }
-        } else {
-            ESP_LOGW(TAG, "Scan failed");
         }
+
+        if (attempt == STA_SCAN_ATTEMPTS) break;
+
+        ESP_LOGW(TAG, "Receiver appears deaf — restarting Wi-Fi driver");
+        esp_wifi_stop();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "re-set STA mode");
+        ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "re-start STA");
+        esp_wifi_set_ps(WIFI_PS_NONE);
+        vTaskDelay(pdMS_TO_TICKS(300));
     }
 
     wifi_config_t sta_cfg = {0};
@@ -188,7 +284,26 @@ esp_err_t wifi_manager_init(void)
     /* Disable retry before stopping — prevents esp_wifi_connect() on a stopped driver */
     s_connecting = false;
 
-    ESP_LOGW(TAG, "STA connection failed — falling back to AP");
+    /* Cold-boot deaf-receiver workaround.
+       After a power-on or hard reset the receiver sometimes hears nothing at
+       all: the pre-connect scan reports 0 APs and every connect attempt fails
+       with reason 201, even with a strong AP a few metres away. Restarting the
+       Wi-Fi driver in place does NOT clear it; a chip-level soft restart
+       reliably does. Root cause unidentified (ESP32-C6 / IDF 6.1).
+
+       So spend one automatic reboot before falling back to setup mode. The flag
+       lives in RTC memory: it survives the esp_restart() below, so the second
+       attempt cannot loop, and it is cleared by a power cycle, so the next cold
+       boot gets its own retry. */
+    if (s_sta_reboot_attempted == 0) {
+        s_sta_reboot_attempted = 1;
+        ESP_LOGW(TAG, "STA failed on cold boot — soft-restarting once to reset the receiver");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_restart();
+    }
+    s_sta_reboot_attempted = 0;
+
+    ESP_LOGW(TAG, "STA connection failed after reboot retry — falling back to AP");
     esp_wifi_stop();
     esp_wifi_set_mode(WIFI_MODE_NULL);
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -221,34 +336,48 @@ esp_err_t wifi_manager_set_credentials(const char *ssid, const char *password)
 
 esp_err_t wifi_manager_scan_json(char *buf, size_t buf_len)
 {
-    /* Scanning requires STA interface — temporarily enable APSTA if in AP-only mode */
+    /* Scanning requires the STA interface — temporarily enable APSTA if in AP-only
+       mode. The mode must stay APSTA until the records have been read: dropping the
+       STA interface discards the scan result list, which yields an empty scan. */
     bool apsta = (s_mode == WIFI_MGR_AP);
     if (apsta) esp_wifi_set_mode(WIFI_MODE_APSTA);
 
     wifi_scan_config_t scan_cfg = { .show_hidden = false, .scan_type = WIFI_SCAN_TYPE_ACTIVE };
     esp_err_t err = esp_wifi_scan_start(&scan_cfg, true);
 
-    if (apsta) esp_wifi_set_mode(WIFI_MODE_AP);
-
     if (err != ESP_OK) {
+        if (apsta) esp_wifi_set_mode(WIFI_MODE_AP);
+        ESP_LOGW(TAG, "scan start failed: %s", esp_err_to_name(err));
         strlcpy(buf, "[]", buf_len);
         return err;
     }
 
     uint16_t ap_count = 0;
     esp_wifi_scan_get_ap_num(&ap_count);
+    ESP_LOGI(TAG, "scan found %u AP(s)", ap_count);
     if (ap_count > 20) ap_count = 20;
 
-    wifi_ap_record_t *records = malloc(ap_count * sizeof(wifi_ap_record_t));
-    if (!records) { strlcpy(buf, "[]", buf_len); return ESP_ERR_NO_MEM; }
+    wifi_ap_record_t *records = NULL;
+    if (ap_count > 0) {
+        records = malloc(ap_count * sizeof(wifi_ap_record_t));
+        if (!records) {
+            if (apsta) esp_wifi_set_mode(WIFI_MODE_AP);
+            strlcpy(buf, "[]", buf_len);
+            return ESP_ERR_NO_MEM;
+        }
+        esp_wifi_scan_get_ap_records(&ap_count, records);
+    }
 
-    esp_wifi_scan_get_ap_records(&ap_count, records);
+    if (apsta) esp_wifi_set_mode(WIFI_MODE_AP);
 
     cJSON *arr = cJSON_CreateArray();
     for (int i = 0; i < ap_count; i++) {
         cJSON *obj = cJSON_CreateObject();
         cJSON_AddStringToObject(obj, "ssid", (char *)records[i].ssid);
         cJSON_AddNumberToObject(obj, "rssi", records[i].rssi);
+        cJSON_AddNumberToObject(obj, "ch",   records[i].primary);
+        ESP_LOGI(TAG, "  [%3d dBm] ch%-3d %s",
+                 records[i].rssi, records[i].primary, (char *)records[i].ssid);
         cJSON_AddItemToArray(arr, obj);
     }
     free(records);

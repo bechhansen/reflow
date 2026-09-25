@@ -3,6 +3,8 @@ idf_component_register(
         "main.c"
         "temperature.c"
         "zigbee_plug.c"
+        "plug_fsm.c"
+        "plug_ctrl.c"
         "reflow_profile.c"
         "reflow_ctrl.c"
         "web_server.c"
@@ -14,7 +16,7 @@ idf_component_register(
         esp_driver_uart
         esp_http_server
         spiffs
-        json
+        cjson
         esp_wifi
         esp_coex
         esp_event

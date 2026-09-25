@@ -11,3 +11,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+controller/sdkconfig.old
+controller/test/plug_fsm/test_plug_fsm
+controller/test/plug_fsm/test_plug_fsm.dSYM/

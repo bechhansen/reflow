@@ -1,0 +1,31 @@
+{
+  "name": "Calibration 170",
+  "description": "Controller tuning profile, not for soldering. Ramp is 1.0 C/s, which this iron can actually follow: it now manages ~1.47 C/s gross and losses take ~0.13 C/s by 130 C, so the earlier 1.39 C/s ramp was unachievable above ~102 C and guaranteed a growing lag. Stays below the ~180 C stall so the whole run yields valid data.",
+  "waypoints": [
+    {
+      "time": 0,
+      "temp": 25,
+      "label": "Start"
+    },
+    {
+      "time": 125,
+      "temp": 150,
+      "label": "Ramp"
+    },
+    {
+      "time": 185,
+      "temp": 170,
+      "label": "Soak"
+    },
+    {
+      "time": 335,
+      "temp": 170,
+      "label": "Hold"
+    },
+    {
+      "time": 365,
+      "temp": 120,
+      "label": "Cool"
+    }
+  ]
+}

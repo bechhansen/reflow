@@ -1,0 +1,46 @@
+{
+  "name": "SMD291SNL SAC305",
+  "description": "Chip Quik SMD291SNL no-clean paste, Sn96.5/Ag3/Cu0.5 (SAC305), liquidus 217-220 C. Peak is held to 235 C rather than the usual 245 C because this hotplate's iron cuts out near 242 C; 235 C still gives ~18 C above liquidus with roughly 55 s time above it.",
+  "waypoints": [
+    {
+      "time": 0,
+      "temp": 25,
+      "label": "Start"
+    },
+    {
+      "time": 90,
+      "temp": 150,
+      "label": "Preheat"
+    },
+    {
+      "time": 180,
+      "temp": 180,
+      "label": "Soak"
+    },
+    {
+      "time": 215,
+      "temp": 217,
+      "label": "Liquidus"
+    },
+    {
+      "time": 240,
+      "temp": 235,
+      "label": "Reflow"
+    },
+    {
+      "time": 255,
+      "temp": 235,
+      "label": "Peak"
+    },
+    {
+      "time": 270,
+      "temp": 217,
+      "label": "Solidify"
+    },
+    {
+      "time": 360,
+      "temp": 50,
+      "label": "Cool"
+    }
+  ]
+}

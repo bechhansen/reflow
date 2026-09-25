@@ -44,7 +44,7 @@ header{
 
 /* ── Layout ── */
 main{
-  height:calc(100vh - 52px);overflow:hidden;display:grid;
+  height:calc(100vh - 52px);height:calc(100dvh - 52px);overflow:hidden;display:grid;
   grid-template-columns:1fr;grid-template-rows:260px 1fr;
 }
 @media(min-width:768px){main{grid-template-columns:1fr 320px;grid-template-rows:1fr}}
@@ -57,23 +57,15 @@ main{
 @media(min-width:768px){#graph-panel{border-right:1px solid var(--border)}}
 
 #graph-stats{
-  display:grid;grid-template-columns:auto auto 1fr;gap:0 28px;
+  display:grid;grid-template-columns:auto 1fr;gap:0 28px;
   align-items:end;margin-bottom:16px;flex-shrink:0;
 }
 .stat-label{font-size:.65rem;font-weight:500;text-transform:uppercase;letter-spacing:.09em;color:var(--faint);margin-bottom:3px}
 .stat-value{font-size:2rem;font-weight:300;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 #temp-big{color:var(--orange)}
-#setpoint-small{font-size:1.3rem;color:var(--text)}
-#phase-label{font-size:1rem;font-weight:400;color:var(--muted);margin-bottom:3px}
 
 #graph-wrap{flex:1;min-height:0;position:relative}
 #graph-wrap canvas{position:absolute;inset:0;width:100%!important;height:100%!important}
-
-#graph-footer{
-  display:flex;align-items:center;justify-content:space-between;
-  margin-top:8px;flex-shrink:0;
-}
-#elapsed{font-size:.84rem;font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums}
 
 /* ── Side panel ── */
 #side-panel{
@@ -119,8 +111,6 @@ input[type=file]{
 .btn-secondary:hover{border-color:#c8c4be;background:#faf9f7}
 .btn-amber    {color:var(--amber);border-color:var(--amber)}
 .btn-amber:hover{background:#fdf6e8}
-.btn-success  {color:var(--green);border-color:var(--green)}
-.btn-success:hover{background:#edf7f2}
 
 .row{display:flex;gap:6px;align-items:center;margin-bottom:6px}
 .row:last-child{margin-bottom:0}
@@ -134,17 +124,14 @@ input[type=file]{
 .badge-on      {background:#edf7f2;color:var(--green)}
 .badge-off     {background:#fdf6e8;color:var(--amber)}
 .badge-unpaired{background:#fef2f2;color:var(--red)}
+.badge-unknown {background:#f3f4f6;color:var(--muted)}
+.badge-pending {background:#eef4fd;color:var(--blue)}
 
 /* ── Run state label ── */
 #run-state{font-size:.77rem;color:var(--faint);margin-top:4px}
 #run-state.running {color:var(--green)}
 #run-state.complete{color:var(--blue)}
 #run-state.error   {color:var(--red)}
-
-/* ── Duty level bar ── */
-#duty-meter{display:flex;gap:3px;margin-top:8px}
-.duty-pip{flex:1;height:3px;border-radius:2px;background:var(--border);transition:background .25s}
-.duty-pip.active{background:var(--orange)}
 
 /* ── Pairing section ── */
 #pairing-overlay{
@@ -157,24 +144,80 @@ input[type=file]{
   font-variant-numeric:tabular-nums;line-height:1;margin:4px 0;
 }
 #pair-hint{font-size:.74rem;color:var(--muted)}
+#zb-ap-notice{
+  font-size:.74rem;line-height:1.45;color:var(--muted);
+  background:var(--bg);border:1px solid var(--border);
+  border-left:2px solid var(--amber);border-radius:4px;
+  padding:8px 10px;margin-bottom:10px}
 
-/* ── Profile list ── */
-.profile-item{
-  display:flex;justify-content:space-between;align-items:center;
-  padding:6px 0;border-bottom:1px solid var(--border);font-size:.82rem;
+/* ── Network summary ── */
+#net-grid{display:grid;grid-template-columns:auto 1fr;gap:5px 10px;margin:0;font-size:.76rem}
+#net-grid dt{color:var(--muted)}
+#net-grid dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+/* ── Tooltips ──
+   Native title= is unreliable: slow to appear on desktop and entirely absent
+   on touch devices. This works on hover, tap and keyboard focus. */
+#tip{
+  position:fixed;z-index:90;max-width:270px;padding:8px 10px;border-radius:5px;
+  background:#1f1f1f;color:#f5f5f5;font-size:.73rem;line-height:1.45;
+  box-shadow:0 4px 14px rgba(0,0,0,.28);pointer-events:none;
+  opacity:0;visibility:hidden;transition:opacity .12s}
+#tip.show{opacity:1;visibility:visible}
+[data-tip]{cursor:help;-webkit-tap-highlight-color:transparent}
+[data-tip]:focus{outline:1px dotted var(--muted);outline-offset:2px}
+
+/* ── Sensor ambient readout ──
+   The MLX90614ESF is rated to +85 °C ambient (its own body, not the plate it
+   measures). Past that the readings drift and then the part fails, so the
+   number is escalated visually well before the limit. */
+#ambient-value{font-size:1.3rem;color:var(--text);transition:color .3s}
+#ambient-value.warn{color:var(--amber)}
+#ambient-value.crit{color:var(--red);font-weight:500}
+#ambient-warning{
+  display:none;margin:8px 10px 0;padding:8px 10px;border-radius:4px;
+  font-size:.76rem;line-height:1.4;
+  background:#fef2f2;border:1px solid var(--red);
+  border-left:3px solid var(--red);color:var(--red)}
+#ambient-warning.show{display:block}
+
+/* ── Toasts & confirm dialog ── */
+#toast-host{
+  position:fixed;left:0;right:0;bottom:0;z-index:60;display:flex;
+  flex-direction:column;align-items:center;gap:6px;padding:0 12px 14px;
+  pointer-events:none}
+.toast{
+  pointer-events:auto;width:100%;max-width:420px;background:var(--surface);
+  border:1px solid var(--border);border-left:3px solid var(--muted);
+  border-radius:6px;box-shadow:var(--shadow);padding:9px 12px;
+  font-size:.8rem;line-height:1.35;cursor:pointer;animation:toast-in .18s ease-out}
+.toast.success{border-left-color:#2e7d32}
+.toast.error{border-left-color:var(--red)}
+@keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+#modal-backdrop{
+  position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.35);
+  display:flex;align-items:center;justify-content:center;padding:20px}
+/* An id selector outranks the UA's [hidden]{display:none}, so without this the
+   dialog is permanently visible (and empty, with no handlers bound). */
+#modal-backdrop[hidden]{display:none}
+#modal-box{
+  background:var(--surface);border-radius:8px;box-shadow:var(--shadow);
+  width:100%;max-width:360px;padding:16px}
+#modal-msg{font-size:.86rem;line-height:1.45;margin-bottom:14px}
+#modal-actions{display:flex;gap:8px;justify-content:flex-end}
+
+/* ── Phone layout ──
+   The desktop layout is a fixed-height, non-scrolling app shell: the side panel
+   scrolls internally next to the graph. Stacked into one column that traps
+   content below the fold — the Wi-Fi "Save" button in particular — because
+   html/body have overflow:hidden. Below 768px, let the document scroll
+   normally and give the graph a fixed height instead of flexing. */
+@media(max-width:767px){
+  html,body{height:auto;overflow:visible;-webkit-overflow-scrolling:touch}
+  main{height:auto;overflow:visible;display:block}
+  #graph-panel{overflow:visible;min-height:0}
+  #graph-wrap{height:240px;flex:none}
+  #side-panel{overflow:visible;height:auto;min-height:0;padding-bottom:32px}
 }
-.profile-item:last-child{border-bottom:none}
-
-/* ── Wi-Fi scan ── */
-#wifi-scan-list{max-height:120px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;margin:6px 0}
-#wifi-scan-list div{
-  padding:7px 10px;font-size:.8rem;cursor:pointer;
-  border-bottom:1px solid var(--border);display:flex;justify-content:space-between;
-}
-#wifi-scan-list div:last-child{border-bottom:none}
-#wifi-scan-list div:hover{background:var(--bg)}
-
-.sep{border:none;border-top:1px solid var(--border);margin:10px 0}
 </style>
 </head>
 <body>
@@ -202,22 +245,15 @@ input[type=file]{
         <div class="stat-value" id="temp-big">— °C</div>
       </div>
       <div>
-        <div class="stat-label">Setpoint</div>
-        <div class="stat-value" id="setpoint-small">—</div>
-      </div>
-      <div>
-        <div class="stat-label">Phase</div>
-        <div id="phase-label" style="font-size:1rem;font-weight:400;color:var(--muted);line-height:1;margin-bottom:3px">Standby</div>
+        <div class="stat-label">Sensor</div>
+        <div class="stat-value" id="ambient-value">—</div>
       </div>
     </div>
+
+    <div id="ambient-warning"></div>
 
     <div id="graph-wrap">
       <canvas id="chart"></canvas>
-    </div>
-
-    <div id="graph-footer">
-      <span style="font-size:.72rem;color:var(--faint)">Elapsed</span>
-      <span id="elapsed">00:00</span>
     </div>
   </div>
 
@@ -235,12 +271,6 @@ input[type=file]{
           <button class="btn btn-danger"   id="btn-stop"  onclick="stopReflow()"  style="flex:1" disabled>Stop</button>
         </div>
         <div id="run-state"></div>
-        <div id="duty-meter">
-          <div class="duty-pip" id="pip0"></div>
-          <div class="duty-pip" id="pip1"></div>
-          <div class="duty-pip" id="pip2"></div>
-          <div class="duty-pip" id="pip3"></div>
-        </div>
       </div>
     </div>
 
@@ -250,10 +280,17 @@ input[type=file]{
         <div class="row" style="justify-content:space-between;margin-bottom:10px">
           <span id="plug-badge" class="badge badge-unpaired">Not paired</span>
         </div>
+        <div id="zb-ap-notice" hidden>
+          <strong>Unavailable in setup mode.</strong> The ESP32-C6 shares one 2.4&nbsp;GHz radio
+          between the Wi-Fi access point and 802.15.4, so Zigbee cannot run while this
+          device is hosting <em>Reflow-Setup</em>. Save your Wi-Fi details below — the
+          controller reboots onto your network and Zigbee starts automatically.
+        </div>
         <div class="row" style="flex-wrap:wrap">
-          <button class="btn btn-amber"     id="btn-pair"        onclick="startPairing()">Pair</button>
-          <button class="btn btn-secondary" id="btn-unpair"      onclick="unpair()">Unpair</button>
-          <button class="btn btn-secondary" id="btn-plug-toggle" onclick="togglePlug()" disabled>Test</button>
+          <button class="btn btn-amber"     id="btn-pair"        onclick="startPairing()" disabled>Pair</button>
+          <button class="btn btn-secondary" id="btn-unpair"      onclick="unpair()" disabled>Unpair</button>
+          <button class="btn btn-secondary" id="btn-plug-toggle" onclick="plugToggle()" disabled
+                  title="Switch the plug and wait for it to confirm its new state">Test toggle</button>
         </div>
         <div id="pairing-overlay">
           <div style="font-size:.68rem;text-transform:uppercase;letter-spacing:.09em;color:var(--faint)">Pairing window open</div>
@@ -266,23 +303,26 @@ input[type=file]{
     <div class="card">
       <div class="card-header">Profiles</div>
       <div class="card-body">
-        <div id="profile-list"></div>
-        <hr class="sep">
-        <input type="file" id="profile-file" accept=".json" style="margin-bottom:8px">
-        <button class="btn btn-secondary" onclick="uploadProfile()" style="width:100%">Upload Profile</button>
+        <div id="profile-count" style="font-size:.76rem;color:var(--muted)">—</div>
+        <a class="btn btn-secondary" href="/profiles.html"
+           style="width:100%;margin-top:10px;display:flex;align-items:center;justify-content:center;text-decoration:none">
+          Edit profiles
+        </a>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-header">Wi-Fi</div>
+      <div class="card-header">Network</div>
       <div class="card-body">
-        <button class="btn btn-secondary" onclick="scanWifi()" style="width:100%;margin-bottom:8px">Scan Networks</button>
-        <div id="wifi-scan-list"></div>
-        <div style="display:flex;flex-direction:column;gap:6px">
-          <input type="text"      id="wifi-ssid" placeholder="SSID">
-          <input type="password"  id="wifi-pass" placeholder="Password">
-          <button class="btn btn-primary" onclick="saveWifi()" style="width:100%">Save &amp; Reboot</button>
-        </div>
+        <dl id="net-grid">
+          <dt>Mode</dt>     <dd id="net-mode">—</dd>
+          <dt>Address</dt>  <dd id="net-ip">—</dd>
+          <dt>Hostname</dt> <dd id="net-host">—</dd>
+        </dl>
+        <a class="btn btn-secondary" href="/network.html"
+           style="width:100%;margin-top:10px;display:flex;align-items:center;justify-content:center;text-decoration:none">
+          Network settings
+        </a>
       </div>
     </div>
 
@@ -293,9 +333,80 @@ input[type=file]{
 <script>
 /* ── State ── */
 let ws = null, chart = null;
-let currentWaypoints = null;
 let pairCountdown = 0, pairTimer = null;
-let lastState = 'idle', lastPlugOn = false;
+let lastState = 'idle';
+let shownProfile = null;      /* profile whose curve is drawn */
+let fetchingProfile = null;   /* in-flight fetch, to avoid duplicates */
+
+/* ── Tooltips ── */
+function initTips() {
+  const tip = document.getElementById('tip');
+  let current = null;
+
+  function show(el) {
+    const text = el.getAttribute('data-tip');
+    if (!text) return;
+    tip.textContent = text;
+    tip.classList.add('show');
+    /* Measure after the text is in place, then keep it on screen. */
+    const r = el.getBoundingClientRect();
+    const t = tip.getBoundingClientRect();
+    let left = r.left;
+    let top  = r.bottom + 6;
+    if (left + t.width > window.innerWidth - 8) left = window.innerWidth - t.width - 8;
+    if (left < 8) left = 8;
+    if (top + t.height > window.innerHeight - 8) top = r.top - t.height - 6;
+    if (top < 8) top = 8;
+    tip.style.left = left + 'px';
+    tip.style.top  = top + 'px';
+    current = el;
+  }
+  function hide() { tip.classList.remove('show'); current = null; }
+
+  document.querySelectorAll('[data-tip]').forEach(el => {
+    el.tabIndex = 0;
+    el.addEventListener('mouseenter', () => show(el));
+    el.addEventListener('mouseleave', hide);
+    el.addEventListener('focus',      () => show(el));
+    el.addEventListener('blur',       hide);
+    /* Tap toggles, so touch devices get the explanations too. */
+    el.addEventListener('click', e => { e.stopPropagation(); current === el ? hide() : show(el); });
+  });
+  document.addEventListener('click', hide);
+  window.addEventListener('scroll', hide, true);
+}
+
+/* ── Notifications ──
+   Replaces alert()/confirm(): those block the event loop, which stalls the
+   telemetry WebSocket, and on phones they render as jarring browser chrome. */
+function toast(msg, kind) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (kind ? ' ' + kind : '');
+  el.textContent = msg;
+  el.onclick = () => el.remove();
+  document.getElementById('toast-host').appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+function askConfirm(msg, okLabel) {
+  return new Promise(resolve => {
+    const back   = document.getElementById('modal-backdrop');
+    const ok     = document.getElementById('modal-ok');
+    const cancel = document.getElementById('modal-cancel');
+    document.getElementById('modal-msg').textContent = msg;
+    ok.textContent = okLabel || 'OK';
+    const done = v => {
+      back.hidden = true;
+      ok.onclick = cancel.onclick = back.onclick = null;
+      resolve(v);
+    };
+    ok.onclick     = () => done(true);
+    cancel.onclick = () => done(false);
+    back.onclick   = e => { if (e.target === back) done(false); };
+    back.hidden = false;
+    ok.focus();
+  });
+}
 
 /* ── WebSocket ── */
 function connect() {
@@ -319,6 +430,7 @@ function handleMessage(msg) {
   else if (msg.type === 'pairing_open')    handlePairingOpen(msg.remaining);
   else if (msg.type === 'pairing_success') handlePairingSuccess(msg.plug_name);
   else if (msg.type === 'pairing_failed')  handlePairingFailed();
+  else if (msg.type === 'plug_result')     handlePlugResult(msg);
 }
 
 function handleTelemetry(d) {
@@ -328,18 +440,77 @@ function handleTelemetry(d) {
 
   /* Temperature stats */
   document.getElementById('temp-big').textContent = d.sensor_ok ? d.temp.toFixed(1) + ' °C' : '—';
-  document.getElementById('setpoint-small').textContent =
-    d.state === 'running' ? d.setpoint.toFixed(1) + ' °C' : '—';
+  /* Draw the curve for the profile the DEVICE is running, not whatever the
+     dropdown happens to show. Otherwise a run started elsewhere (another
+     browser, the API) is plotted against the wrong curve, and the phase label
+     — which comes from the running profile — contradicts the picture. */
+  if (d.profile) {
+    /* Keep the selector in step every frame: telemetry can arrive before the
+       profile list has loaded, and a one-shot sync would then never happen.
+       It is also LOCKED while a run is active — changing profiles mid-run
+       cannot affect the run, and letting it redraw the target curve made a
+       correct run look broken. */
+    const sel = document.getElementById('profile-select');
+    if (sel.value !== d.profile &&
+        Array.from(sel.options).some(o => o.value === d.profile)) {
+      sel.value = d.profile;
+    }
+    sel.disabled = (d.state === 'running');
+    sel.title = sel.disabled ? 'Locked while a run is in progress' : '';
+    /* Fetch the curve once per profile; only latch it on success so a failed
+       request retries on the next frame rather than leaving a blank chart. */
+    if (d.profile !== shownProfile && d.profile !== fetchingProfile) {
+      fetchingProfile = d.profile;
+      fetch('/api/profiles/' + encodeURIComponent(d.profile))
+        .then(r => r.json())
+        .then(p => {
+          if (!p.waypoints) throw new Error('no waypoints');
+          shownProfile = d.profile;
+          if (chart) drawProfileLine(p.waypoints);
+        })
+        .catch(() => {})
+        .finally(() => { fetchingProfile = null; });
+    }
+  } else {
+    const sel = document.getElementById('profile-select');
+    sel.disabled = false;
+    sel.title = '';
+    if (d.state === 'idle') shownProfile = null;
+  }
 
-  /* Phase */
-  document.getElementById('phase-label').textContent =
-    d.state === 'running'  ? d.phase :
-    d.state === 'complete' ? 'Complete' : 'Standby';
+  /* Network summary — full configuration lives on /network.html */
+  document.getElementById('net-mode').textContent =
+    d.wifi_mode === 'ap' ? 'Setup AP' : 'Connected';
+  document.getElementById('net-ip').textContent =
+    d.wifi_mode === 'ap' ? '192.168.4.1' : (d.ip || '—');
+  document.getElementById('net-host').textContent =
+    (d.hostname || 'reflow') + '.local';
 
-  /* Elapsed */
-  const mm = String(Math.floor(d.elapsed / 60)).padStart(2, '0');
-  const ss = String(d.elapsed % 60).padStart(2, '0');
-  document.getElementById('elapsed').textContent = mm + ':' + ss;
+  /* Sensor die temperature. Thresholds are referenced to the MLX90614ESF's
+     85 °C ambient maximum: caution with 20 °C of headroom left, critical with 5. */
+  const ambEl  = document.getElementById('ambient-value');
+  const ambWarn = document.getElementById('ambient-warning');
+  if (typeof d.ambient === 'number' && d.sensor_ok) {
+    const a = d.ambient;
+    ambEl.textContent = a.toFixed(1) + ' °C';
+    ambEl.className = 'stat-value' + (a >= 80 ? ' crit' : a >= 65 ? ' warn' : '');
+    if (a >= 80) {
+      ambWarn.textContent = 'Sensor at ' + a.toFixed(1) + ' °C — the MLX90614 is rated to '
+        + '85 °C ambient. Readings are unreliable and the sensor risks damage. '
+        + 'Stop the run and increase the gap between sensor and soleplate.';
+      ambWarn.classList.add('show');
+    } else if (a >= 65) {
+      ambWarn.textContent = 'Sensor at ' + a.toFixed(1) + ' °C, approaching its 85 °C limit. '
+        + 'Consider more clearance or shielding above the plate.';
+      ambWarn.classList.add('show');
+    } else {
+      ambWarn.classList.remove('show');
+    }
+  } else {
+    ambEl.textContent = '—';
+    ambEl.className = 'stat-value';
+    ambWarn.classList.remove('show');
+  }
 
   /* Buttons */
   const running = d.state === 'running';
@@ -356,36 +527,43 @@ function handleTelemetry(d) {
     rs.className   = d.state;
   }
 
-  /* Duty pips */
-  for (let i = 0; i < 4; i++)
-    document.getElementById('pip' + i).className = 'duty-pip' + (i < d.duty_steps ? ' active' : '');
-
-  /* Plug badge */
+  /* Plug badge: only ever the state the plug itself confirmed. */
   const badge = document.getElementById('plug-badge');
-  if (d.plug_paired) {
-    badge.textContent = d.plug_on ? 'On' : 'Off';
-    badge.className   = 'badge ' + (d.plug_on ? 'badge-on' : 'badge-off');
+  if (d.plug_paired && d.plug_pending) {
+    badge.textContent = 'Switching…';
+    badge.className   = 'badge badge-pending';
+  } else if (d.plug_paired && d.plug_state === 'on') {
+    badge.textContent = 'On';
+    badge.className   = 'badge badge-on';
+  } else if (d.plug_paired && d.plug_state === 'off') {
+    badge.textContent = 'Off';
+    badge.className   = 'badge badge-off';
+  } else if (d.plug_paired) {
+    badge.textContent = 'Unknown';
+    badge.className   = 'badge badge-unknown';
   } else {
     badge.textContent = 'Not paired';
     badge.className   = 'badge badge-unpaired';
   }
 
-  /* Test button */
-  lastPlugOn = d.plug_on;
-  const btn = document.getElementById('btn-plug-toggle');
-  btn.disabled  = !(d.plug_paired && d.state !== 'running');
-  btn.className = 'btn ' + (d.plug_on ? 'btn-danger' : 'btn-success');
-
-  /* Graph */
-  if (chart && running) {
-    if (lastState !== 'running') {
-      chart.data.datasets[0].data = [];
-      if (currentWaypoints) drawProfileLine(currentWaypoints);
-    }
-    chart.data.datasets[0].data.push({ x: d.elapsed, y: d.temp });
-    chart.update('none');
+  /* Zigbee is skipped in AP/setup mode (see main.c: Wi-Fi/802.15.4 coexistence),
+     so surface why and disable every control that would silently do nothing. */
+  const apMode = d.wifi_mode === 'ap';
+  document.getElementById('zb-ap-notice').hidden = !apMode;
+  if (apMode) {
+    for (const id of ['btn-pair', 'btn-unpair'])
+      document.getElementById(id).disabled = true;
+  } else {
+    document.getElementById('btn-pair').disabled   = false;
+    document.getElementById('btn-unpair').disabled = false;
   }
-  if (lastState === 'running' && d.state !== 'running') chart && chart.update();
+
+  /* Once the device reports the change as pending, telemetry governs. */
+  if (d.plug_pending) plugToggleSent = false;
+  document.getElementById('btn-plug-toggle').disabled =
+    apMode || !d.plug_available || d.plug_pending ||
+    d.plug_state === 'unknown' || plugToggleSent;
+
   lastState = d.state;
 }
 
@@ -396,9 +574,6 @@ function initChart() {
     type: 'line',
     data: {
       datasets: [
-        { label: 'Actual',  data: [], borderColor: '#c05c28',
-          backgroundColor: 'rgba(192,92,40,.06)', fill: true,
-          pointRadius: 0, borderWidth: 1.5, tension: 0.3, parsing: false },
         { label: 'Target',  data: [], borderColor: '#2558a0',
           backgroundColor: 'transparent',
           pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4], tension: 0, parsing: false },
@@ -426,7 +601,7 @@ function initChart() {
 }
 
 function drawProfileLine(waypoints) {
-  chart.data.datasets[1].data = waypoints.map(wp => ({ x: wp.time, y: wp.temp }));
+  chart.data.datasets[0].data = waypoints.map(wp => ({ x: wp.time, y: wp.temp }));
   chart.options.scales.x.max = waypoints[waypoints.length - 1].time + 30;
   chart.update('none');
 }
@@ -435,78 +610,52 @@ function drawProfileLine(waypoints) {
 function loadProfiles() {
   fetch('/api/profiles').then(r => r.json()).then(names => {
     const sel = document.getElementById('profile-select');
-    sel.innerHTML = '';
-    names.forEach(n => {
-      const opt = document.createElement('option');
-      opt.value = n; opt.textContent = n; sel.appendChild(opt);
-    });
-    renderProfileList(names);
-    if (names.length) onProfileChange();
+    const keep = sel.value;
+    sel.innerHTML = names.length
+      ? names.map(n => `<option value="${n}">${n}</option>`).join('')
+      : '<option value="">No profiles</option>';
+    if (names.includes(keep)) sel.value = keep;
+    document.getElementById('profile-count').textContent =
+      names.length + (names.length === 1 ? ' profile stored' : ' profiles stored');
+    onProfileChange();
   }).catch(() => {});
 }
 
+/* Selecting a profile draws its target curve on the chart. Guarded on `chart`
+   because initChart() is allowed to fail without taking the page down. */
 function onProfileChange() {
   const name = document.getElementById('profile-select').value;
   if (!name) return;
+  /* During a run the chart must keep showing what the DEVICE is running.
+     Otherwise picking another profile here silently redraws the target curve
+     and the telemetry sync will not restore it (d.profile has not changed), so
+     you end up comparing the live trace against a profile that is not running
+     — which is exactly how a good run can look like a broken one. */
+  if (lastState === 'running' && shownProfile && name !== shownProfile) {
+    toast('Run in progress — chart stays on "' + shownProfile + '"');
+    return;
+  }
   fetch('/api/profiles/' + encodeURIComponent(name))
     .then(r => r.json())
     .then(p => {
       if (!p.waypoints) return;
-      currentWaypoints = p.waypoints;
-      chart.data.datasets[0].data = [];
+      if (!chart) return;
       drawProfileLine(p.waypoints);
-    });
-}
-
-function renderProfileList(names) {
-  const div = document.getElementById('profile-list');
-  div.innerHTML = '';
-  if (!names.length) {
-    div.innerHTML = '<div style="font-size:.78rem;color:var(--faint);padding:4px 0">No profiles</div>';
-    return;
-  }
-  names.forEach(n => {
-    const row = document.createElement('div');
-    row.className = 'profile-item';
-    row.innerHTML = `<span>${n}</span>
-      <button class="btn btn-secondary" style="padding:3px 9px;min-height:auto;font-size:.72rem;color:var(--red);border-color:var(--red)"
-        onclick="deleteProfile('${n}')">Delete</button>`;
-    div.appendChild(row);
-  });
-}
-
-function uploadProfile() {
-  const file = document.getElementById('profile-file').files[0];
-  if (!file) return alert('Select a .json file first');
-  const reader = new FileReader();
-  reader.onload = e => {
-    let json; try { json = JSON.parse(e.target.result); } catch { alert('Invalid JSON'); return; }
-    const name = json.name || file.name.replace('.json', '');
-    fetch('/api/profiles/' + encodeURIComponent(name), {
-      method: 'POST', body: e.target.result, headers: { 'Content-Type': 'application/json' }
-    }).then(() => loadProfiles());
-  };
-  reader.readAsText(file);
-}
-
-function deleteProfile(name) {
-  if (!confirm('Delete "' + name + '"?')) return;
-  fetch('/api/profiles/' + encodeURIComponent(name), { method: 'DELETE' }).then(() => loadProfiles());
+    })
+    .catch(() => {});
 }
 
 /* ── Reflow ── */
 function startReflow() {
   const name = document.getElementById('profile-select').value;
-  if (!name) return alert('Select a profile first');
-  chart.data.datasets[0].data = [];
-  chart.update('none');
+  if (!name) { toast('Select a profile first', 'error'); return; }
   send({ type: 'start', profile: name });
 }
 function stopReflow() { send({ type: 'stop' }); }
 
 /* ── Zigbee pairing ── */
 function startPairing() {
-  if (!ws || ws.readyState !== 1) { alert('Not connected to device.'); return; }
+  if (!ws || ws.readyState !== 1) { toast('Not connected to device', 'error'); return; }
   send({ type: 'start_pairing' });
   handlePairingOpen(60);
 }
@@ -522,45 +671,71 @@ function handlePairingOpen(remaining) {
     if (pairCountdown <= 0) { clearInterval(pairTimer); closePairingOverlay(); }
   }, 1000);
 }
-function handlePairingSuccess(name) { clearInterval(pairTimer); closePairingOverlay(); alert('Paired: ' + name); }
-function handlePairingFailed()     { clearInterval(pairTimer); closePairingOverlay(); alert('No device found.'); }
+function handlePairingSuccess(name) { clearInterval(pairTimer); closePairingOverlay(); toast('Paired: ' + name, 'success'); }
+function handlePairingFailed()     { clearInterval(pairTimer); closePairingOverlay(); toast('No device found', 'error'); }
 function closePairingOverlay()     { document.getElementById('pairing-overlay').classList.remove('active'); }
 
-function unpair()     { if (!confirm('Unpair plug?')) return; send({ type: 'unpair' }); }
-function togglePlug() { send({ type: 'plug_set', on: !lastPlugOn }); }
-
-/* ── Wi-Fi ── */
-function scanWifi() {
-  document.getElementById('wifi-scan-list').innerHTML =
-    '<div style="color:var(--faint);font-style:italic;padding:7px 10px">Scanning…</div>';
-  fetch('/api/wifi/scan').then(r => r.json()).then(aps => {
-    const list = document.getElementById('wifi-scan-list');
-    list.innerHTML = '';
-    aps.sort((a, b) => b.rssi - a.rssi).forEach(ap => {
-      const d = document.createElement('div');
-      d.innerHTML = `<span>${ap.ssid}</span><span style="color:var(--faint)">${ap.rssi} dBm</span>`;
-      d.onclick = () => { document.getElementById('wifi-ssid').value = ap.ssid; };
-      list.appendChild(d);
-    });
-  }).catch(() => {
-    document.getElementById('wifi-scan-list').innerHTML =
-      '<div style="color:var(--red);padding:7px 10px">Scan failed</div>';
-  });
+/* ── Plug test toggle ──
+   Disabled from the click until the device confirms or rejects, so a second
+   click cannot race the first. The device rejects it anyway ("busy"). */
+let plugToggleSent = false, plugToggleTimer = null;
+function plugToggle() {
+  plugToggleSent = true;
+  document.getElementById('btn-plug-toggle').disabled = true;
+  send({ type: 'plug_toggle' });
+  /* If the request was lost with the socket, do not stay locked forever. */
+  clearTimeout(plugToggleTimer);
+  plugToggleTimer = setTimeout(() => { plugToggleSent = false; }, 3000);
+}
+function handlePlugResult(m) {
+  plugToggleSent = false;
+  clearTimeout(plugToggleTimer);
+  const reasons = {
+    timeout:     'plug did not answer',
+    mismatch:    'plug reported the old state',
+    unpaired:    'plug was unpaired',
+    busy:        'a change is already pending',
+    unknown:     'plug state is not known yet',
+    not_paired:  'no plug paired',
+    unavailable: 'Zigbee is not running',
+  };
+  if (m.ok) toast('Plug confirmed ' + m.state.toUpperCase(), 'success');
+  else      toast('Plug not switched: ' + (reasons[m.reason] || m.reason), 'error');
 }
 
-function saveWifi() {
-  const ssid = document.getElementById('wifi-ssid').value.trim();
-  const pass = document.getElementById('wifi-pass').value;
-  if (!ssid) return alert('Enter an SSID');
-  if (!confirm('Save credentials for "' + ssid + '" and reboot?')) return;
-  fetch('/api/wifi/credentials', {
-    method: 'POST', body: JSON.stringify({ ssid, password: pass }),
-    headers: { 'Content-Type': 'application/json' }
-  }).then(() => alert('Saved. Rebooting…'));
+async function unpair() {
+  if (!await askConfirm('Unpair plug?', 'Unpair')) return;
+  send({ type: 'unpair' });
+  toast('Plug unpaired');
 }
 
 /* ── Init ── */
-document.addEventListener('DOMContentLoaded', () => { initChart(); connect(); });
+document.addEventListener('DOMContentLoaded', () => {
+  /* connect() first, and initChart() isolated: if chart.js failed to load or
+     parse, "new Chart(...)" throws and would otherwise abort this handler
+     before the WebSocket is ever opened — leaving the UI stuck on
+     "connecting..." with no telemetry at all. The graph is optional; the
+     telemetry feed is not. handleTelemetry already guards on `chart`. */
+  connect();
+  initTips();
+  try {
+    initChart();
+  } catch (e) {
+    console.error('chart init failed — continuing without graph:', e);
+  }
+});
 </script>
+<div id="tip" role="tooltip"></div>
+<div id="toast-host"></div>
+
+<div id="modal-backdrop" hidden>
+  <div id="modal-box">
+    <div id="modal-msg"></div>
+    <div id="modal-actions">
+      <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+      <button class="btn btn-primary"   id="modal-ok">OK</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

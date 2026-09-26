@@ -2,6 +2,7 @@
 #include "reflow_algo.h"
 #include "temperature.h"
 #include "plug_ctrl.h"
+#include "ota_update.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_check.h"
@@ -351,6 +352,8 @@ static esp_err_t start(start_kind_t kind, const reflow_profile_t *profile,
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (s_active) {
         why = "busy"; err = ESP_ERR_INVALID_STATE;
+    } else if (ota_update_busy()) {
+        why = "updating"; err = ESP_ERR_INVALID_STATE;
     } else if (!s_st.sensor_ok) {
         why = "sensor"; err = ESP_ERR_INVALID_STATE;
     } else if (!ps.available || ps.state == PLUG_UNKNOWN) {

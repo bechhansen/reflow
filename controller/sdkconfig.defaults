@@ -1,5 +1,9 @@
-# Flash size (ESP32-C6 dev boards ship with 4MB)
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# Flash size: 8 MB, for two app slots (over-the-air updates, partitions.csv)
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# Over-the-air updates: a new app must confirm itself after booting, or the
+# bootloader returns to the previous one (ota_update.c)
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # Partition table
 CONFIG_PARTITION_TABLE_CUSTOM=y
@@ -33,6 +37,9 @@ CONFIG_LWIP_MAX_SOCKETS=16
 
 # FreeRTOS tick rate (1ms resolution)
 CONFIG_FREERTOS_HZ=1000
+
+# Optimise for size: keeps the app comfortably inside its 2 MB OTA slot
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
 # Stack sizes
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

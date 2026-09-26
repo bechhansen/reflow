@@ -19,6 +19,7 @@
 #include "reflow_ctrl.h"
 #include "wifi_manager.h"
 #include "web_server.h"
+#include "ota_update.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -206,6 +207,10 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Starting web server...");
     ESP_ERROR_CHECK(web_server_start());
+
+    /* Checks GitHub for releases (STA mode only) and confirms a freshly
+       updated firmware once it has run for 30 s. */
+    ESP_ERROR_CHECK(ota_update_init());
 
     /* Zigbee only runs in STA mode — SoftAP + 802.15.4 share one antenna
        and the ESP32-C6 coexistence arbiter does not support that combination.

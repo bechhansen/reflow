@@ -1,11 +1,17 @@
 name: ESP32 Build
 
+# Every push and pull request is built; the result is kept as a workflow
+# artifact only. Tags make releases:
+#   vX.Y.Z                      production release: the controllers find it
+#                               (GitHub "latest") and offer it as an update
+#   vX.Y.Z-alpha*/-beta*/-rc*   pre-release: downloadable for a manual upload
+#                               from the Settings page; never offered to
+#                               controllers (they only take exactly vX.Y.Z)
 on:
   push:
     branches: [ main, develop ]
     tags:
       - 'v*.*.*'
-      - 'v*.*.*-*'
     paths:
       - 'controller/**'
       - '.github/workflows/esp32-build.yml'
@@ -20,25 +26,43 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
+      kind:    ${{ steps.version.outputs.KIND }}
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         submodules: 'recursive'
+        fetch-depth: 0          # tags, for git describe
 
-    - name: Generate version
+    - name: Version
       id: version
       run: |
         if [[ "$GITHUB_REF" == refs/tags/* ]]; then
           VERSION="${GITHUB_REF_NAME}"
         else
-          VERSION=$(git describe --tags --always --dirty --exclude='*-alpha*' --exclude='*-beta*' --exclude='*-rc*' --exclude='*-pre*' --exclude='*-preview*')
+          VERSION=$(git describe --tags --always --dirty)
         fi
-        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "Building version: $VERSION"
+        if [[ "$GITHUB_REF" == refs/tags/* && "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          KIND=production
+        elif [[ "$GITHUB_REF" == refs/tags/* && "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc) ]]; then
+          KIND=prerelease
+        else
+          KIND=build
+        fi
+        # ESP-IDF takes the firmware version from version.txt
+        echo "$VERSION" > controller/version.txt
+        echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "KIND=$KIND" >> "$GITHUB_OUTPUT"
+        echo "Building $VERSION ($KIND)"
 
-    - name: ESP-IDF Build
+    - name: Host tests
+      run: |
+        make -C controller/test/reflow_algo test
+        make -C controller/test/plug_fsm test
+
+    # idf.py build fails by itself if the app outgrows its 2 MB OTA slot.
+    - name: ESP-IDF build
       uses: espressif/esp-idf-ci-action@v1
       with:
         esp_idf_version: v6.1
@@ -47,32 +71,48 @@ jobs:
         command: 'idf.py build'
 
     - name: Fix build permissions
-      run: |
-        sudo chown -R $USER:$USER controller/build
+      run: sudo chown -R $USER:$USER controller/build
 
     - name: Prepare artifacts
       run: |
-        cd controller/build
-        cp controller.bin firmware.bin
-        cp bootloader/bootloader.bin bootloader.bin
-        cp partition_table/partition-table.bin partition-table.bin
-        ls -lh firmware.bin bootloader.bin partition-table.bin spiffs.bin
+        mkdir -p out/usb
+        B=controller/build
+        # The over-the-air image: what the controller downloads or you upload.
+        cp $B/controller.bin out/reflow-controller.bin
+        # A full image set for a first-time or recovery flash over USB.
+        cp $B/bootloader/bootloader.bin         out/usb/bootloader.bin
+        cp $B/partition_table/partition-table.bin out/usb/partition-table.bin
+        cp $B/ota_data_initial.bin              out/usb/ota_data_initial.bin
+        cp $B/controller.bin                    out/usb/reflow-controller.bin
+        cat > out/usb/FLASH.txt <<EOF
+        Reflow controller ${{ steps.version.outputs.VERSION }}: first-time / recovery flash over USB.
+        This keeps saved profiles, Wi-Fi settings and the Zigbee pairing.
+
+          esptool.py --chip esp32c6 -p <port> -b 460800 write_flash \\
+            --flash_mode dio --flash_size 8MB --flash_freq 80m \\
+            0x0      bootloader.bin \\
+            0x8000   partition-table.bin \\
+            0x295000 ota_data_initial.bin \\
+            0x10000  reflow-controller.bin
+
+        After that, updates install over Wi-Fi from the Settings page.
+        EOF
+        (cd out/usb && zip -q ../reflow-${{ steps.version.outputs.VERSION }}-usb.zip *)
+        ls -lh out out/usb
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ steps.version.outputs.VERSION }}
         path: |
-          controller/build/firmware.bin
-          controller/build/bootloader.bin
-          controller/build/partition-table.bin
-          controller/build/spiffs.bin
+          out/reflow-controller.bin
+          out/reflow-${{ steps.version.outputs.VERSION }}-usb.zip
         retention-days: 30
 
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: needs.build.outputs.kind == 'production' || needs.build.outputs.kind == 'prerelease'
     permissions:
       contents: write
 
@@ -83,30 +123,18 @@ jobs:
         name: firmware-${{ needs.build.outputs.version }}
         path: release_assets
 
-    - name: Create release zip
-      run: |
-        cd release_assets
-        ZIP_NAME=reflow-${{ needs.build.outputs.version }}.zip
-        zip "$ZIP_NAME" firmware.bin bootloader.bin partition-table.bin spiffs.bin
-        ls -lh "$ZIP_NAME"
-
-    - name: Determine prerelease flag
-      id: relmeta
-      run: |
-        TAG="$GITHUB_REF_NAME"
-        PRERELEASE=false
-        if [[ "$TAG" =~ -(alpha|beta|rc|pre|preview|prerelease) ]]; then
-          PRERELEASE=true
-        fi
-        echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
-
     - name: Publish GitHub release
       uses: ncipollo/release-action@v1
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         tag: ${{ github.ref_name }}
         name: ${{ github.ref_name }}
-        body: "Automated release for ${{ github.ref_name }}."
+        body: |
+          ${{ needs.build.outputs.kind == 'production' && 'Production release: controllers offer this as an update (Settings, Firmware).' || 'Pre-release: not offered to controllers. Install it with Settings, Firmware, Upload firmware file.' }}
+
+          - `reflow-controller.bin`: the firmware image (over-the-air update or manual upload)
+          - `reflow-${{ needs.build.outputs.version }}-usb.zip`: first-time or recovery flash over USB
         draft: false
-        prerelease: ${{ steps.relmeta.outputs.prerelease }}
-        artifacts: release_assets/reflow-${{ needs.build.outputs.version }}.zip
+        prerelease: ${{ needs.build.outputs.kind == 'prerelease' }}
+        makeLatest: ${{ needs.build.outputs.kind == 'production' }}
+        artifacts: release_assets/reflow-controller.bin,release_assets/reflow-${{ needs.build.outputs.version }}-usb.zip

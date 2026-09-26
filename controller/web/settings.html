@@ -1,0 +1,284 @@
+<!-- Settings: device-wide display settings (GET/POST /api/settings). -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Settings — Reflow</title>
+<script src="/theme.js"></script>
+<script src="/units.js"></script>
+<style>
+:root{
+  --card-border:transparent;
+  --bg:#f4f3f0; --surface:#fff; --border:#e3e0da; --text:#1a1a1a;
+  --muted:#737373; --faint:#a3a3a3; --red:#b4232b; --amber:#a87020;
+  --shadow:0 1px 2px rgba(0,0,0,.06);
+  --err-bg:#fef2f2; --ok-bg:#f0fdf4; --ok:#2e7d32; color-scheme:light;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font-family:system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+header{display:flex;align-items:center;gap:10px;height:52px;padding:0 14px;
+  background:var(--surface);border-bottom:1px solid var(--border)}
+header h1{font-size:.95rem;font-weight:500;margin:0}
+a.back{color:var(--muted);text-decoration:none;font-size:.82rem}
+a.back:hover{color:var(--text)}
+main{max-width:520px;margin:0 auto;padding:14px 14px 40px}
+.card{background:var(--surface);border:1px solid var(--card-border);border-radius:6px;box-shadow:var(--shadow);
+  margin-bottom:12px;overflow:hidden}
+.card-header{padding:9px 14px;border-bottom:1px solid var(--border);
+  font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--muted)}
+.card-body{padding:12px 14px 14px}
+label{display:block;font-size:.72rem;font-weight:500;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--faint);margin:10px 0 4px}
+input{width:100%;padding:8px 10px;font-size:.88rem;font-family:inherit;
+  border:1px solid var(--border);border-radius:4px;background:var(--surface);
+  color:var(--text)}
+input:focus{outline:none;border-color:var(--muted)}
+.hint{font-size:.72rem;color:var(--faint);line-height:1.45;margin-top:5px}
+.btn{padding:8px 14px;font-size:.82rem;font-weight:500;font-family:inherit;
+  border:1px solid var(--border);border-radius:4px;background:var(--surface);
+  color:var(--text);cursor:pointer;min-height:36px}
+.btn:hover:not(:disabled){border-color:var(--muted)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn-primary{border-color:var(--text)}
+.btn-wide{width:100%}
+dl{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;margin:0;font-size:.8rem}
+dt{color:var(--muted)}
+dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+#scan-list{max-height:170px;overflow-y:auto;border:1px solid var(--border);
+  border-radius:4px;margin:6px 0}
+#scan-list div{display:flex;justify-content:space-between;gap:8px;
+  padding:7px 10px;font-size:.8rem;border-bottom:1px solid var(--border);
+  cursor:pointer}
+#scan-list div:last-child{border-bottom:none}
+#scan-list div:hover{background:var(--bg)}
+#msg,.msg{margin-top:10px;padding:8px 10px;border-radius:4px;font-size:.78rem;
+  line-height:1.45;display:none}
+#msg.show,.msg.show{display:block}
+#msg.err,.msg.err{background:var(--err-bg);border:1px solid var(--red);color:var(--red)}
+#msg.ok,.msg.ok{background:var(--ok-bg);border:1px solid var(--ok);color:var(--ok)}
+
+/* Dark: while no theme is chosen, follow the browser; a chosen theme wins
+   (theme.js sets data-theme). The same block twice, once per route. */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#000; --surface:#2c2c2c; --border:#5e5e5e; --text:#f5f5f5; --card-border:#5e5e5e;
+    --muted:#cfcfcf; --faint:#b4b4b4; --red:#e57373; --amber:#dcae52; --orange:#e8895a;
+    --shadow:0 1px 3px rgba(0,0,0,.6);
+    --err-bg:#3a1b1b; --ok-bg:#15301f; --ok:#5cbf66;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#000; --surface:#2c2c2c; --border:#5e5e5e; --text:#f5f5f5; --card-border:#5e5e5e;
+  --muted:#cfcfcf; --faint:#b4b4b4; --red:#e57373; --amber:#dcae52; --orange:#e8895a;
+  --shadow:0 1px 3px rgba(0,0,0,.6);
+  --err-bg:#3a1b1b; --ok-bg:#15301f; --ok:#5cbf66;
+  color-scheme:dark;
+}
+.theme-btn{
+  margin-left:auto;padding:4px 9px;min-height:28px;font-size:.74rem;font-family:inherit;
+  background:var(--surface);color:var(--muted);border:1px solid var(--border);
+  border-radius:4px;cursor:pointer}
+.theme-btn:hover{color:var(--text);border-color:var(--muted)}
+.choice{display:flex;gap:8px;margin-top:6px}
+.choice label{flex:1;display:flex;align-items:center;gap:8px;margin:0;padding:9px 12px;
+  border:1px solid var(--border);border-radius:4px;cursor:pointer;
+  font-size:.86rem;font-weight:400;text-transform:none;letter-spacing:0;color:var(--text)}
+.choice input{width:auto;margin:0;accent-color:var(--text)}
+.choice label:has(input:checked){border-color:var(--text);font-weight:600}
+.fw{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;margin:0;font-size:.82rem}
+.fw dt{color:var(--muted)}
+.fw dd{margin:0;text-align:right;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.row .btn{flex:1}
+progress{width:100%;height:10px;margin-top:10px}
+#fw-file{display:none}
+</style>
+
+<header>
+  <a class="back" href="/">&larr; Back</a>
+  <h1>Settings</h1>
+  <button class="theme-btn" type="button" onclick="reflowTheme.toggle()">Theme</button>
+</header>
+
+<main>
+  <div class="card">
+    <div class="card-header">Temperature unit</div>
+    <div class="card-body">
+      <div class="choice" role="radiogroup" aria-label="Temperature unit">
+        <label><input type="radio" name="unit" value="C" onchange="saveUnit(this.value)"> Celsius (°C)</label>
+        <label><input type="radio" name="unit" value="F" onchange="saveUnit(this.value)"> Fahrenheit (°F)</label>
+      </div>
+      <div class="hint">Applies to every page and every browser. Profiles, the
+        controller and its logs keep working in °C; only what the pages show
+        and take is converted.</div>
+      <div id="msg"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Firmware</div>
+    <div class="card-body">
+      <dl class="fw">
+        <dt>Running</dt>        <dd id="fw-version">—</dd>
+        <dt>Built</dt>          <dd id="fw-date">—</dd>
+        <dt>Latest release</dt> <dd id="fw-latest">—</dd>
+        <dt>Last checked</dt>   <dd id="fw-checked">—</dd>
+      </dl>
+      <progress id="fw-progress" max="100" value="0" hidden></progress>
+      <div class="row">
+        <button class="btn" id="fw-check" onclick="fwCheck()">Check now</button>
+        <button class="btn btn-primary" id="fw-install" onclick="fwInstall()" hidden>Install</button>
+      </div>
+      <div class="row">
+        <button class="btn" id="fw-upload" onclick="document.getElementById('fw-file').click()">Upload firmware file…</button>
+        <input type="file" id="fw-file" accept=".bin" onchange="fwUpload(this.files[0])">
+      </div>
+      <div class="hint">Updates come from production releases on GitHub (tags vX.Y.Z) and
+        install only when you click Install. Alpha, beta and test builds are never
+        downloaded: install those with <em>Upload firmware file</em>. Nothing installs
+        while a reflow run is active, and the heater is switched off first. If a new
+        firmware does not start properly, the controller returns to the previous one
+        by itself.</div>
+      <div id="fw-msg" class="msg"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Theme</div>
+    <div class="card-body">
+      <div class="hint" style="margin-top:0">Light or dark follows your browser's setting.
+        The theme button at the top right switches it for this browser only.</div>
+    </div>
+  </div>
+</main>
+
+<script>
+function show(t, k) { const m = document.getElementById('msg'); m.textContent = t; m.className = 'show ' + k; }
+function checkCurrent() {
+  const r = document.querySelector('input[name=unit][value="' + reflowUnits.unit + '"]');
+  if (r) r.checked = true;
+}
+reflowUnits.ready(checkCurrent);
+
+function saveUnit(u) {
+  fetch('/api/settings', {
+    method: 'POST', body: JSON.stringify({ temp_unit: u }),
+    headers: { 'Content-Type': 'application/json' }
+  }).then(r => r.json()).then(j => {
+    if (!j.ok) throw new Error('not saved');
+    show('Saved: temperatures are shown in ' + (u === 'F' ? 'Fahrenheit (°F)' : 'Celsius (°C)') + '.', 'ok');
+  }).catch(() => { show('Could not save the setting.', 'err'); checkCurrent(); });
+}
+
+/* ── Firmware ── */
+function fwShow(t, k) { const m = document.getElementById('fw-msg'); m.textContent = t; m.className = 'msg' + (t ? ' show ' + k : ''); }
+let fwBusy = false;          /* an upload or install started from this page */
+
+function ago(s) {
+  if (s < 0) return 'never';
+  if (s < 90) return s + ' s ago';
+  if (s < 5400) return Math.round(s / 60) + ' min ago';
+  return Math.round(s / 3600) + ' h ago';
+}
+
+function fwRender(o) {
+  document.getElementById('fw-version').textContent = o.version || '—';
+  document.getElementById('fw-date').textContent = o.build_date || '—';
+  document.getElementById('fw-latest').textContent =
+    o.state === 'checking' ? 'checking…' : (o.latest || (o.last_check_s < 0 ? '—' : 'none found'));
+  document.getElementById('fw-checked').textContent = ago(o.last_check_s);
+  const inst = document.getElementById('fw-install');
+  inst.hidden = o.state !== 'available';
+  inst.textContent = 'Install ' + (o.latest || '');
+  const working = o.state === 'installing' || o.state === 'rebooting' || o.state === 'checking';
+  for (const id of ['fw-check', 'fw-install', 'fw-upload']) document.getElementById(id).disabled = working || fwBusy;
+  const bar = document.getElementById('fw-progress');
+  if (!fwBusy) { bar.hidden = o.state !== 'installing'; bar.value = o.progress || 0; }
+  if (o.state === 'installing')     fwShow((o.message || 'Installing') + ' — ' + (o.progress || 0) + ' %', 'ok');
+  else if (o.state === 'rebooting') fwShow('Restarting into the new firmware…', 'ok');
+  else if (o.state === 'error')     fwShow(o.message, 'err');
+  else if (o.state === 'available') fwShow('Update ' + o.latest + ' is available.', 'ok');
+  else if (fwBusy)                  { /* keep the upload's own messages */ }
+  else if (o.message)               fwShow(o.message, o.message.includes('rolled back') ? 'err' : 'ok');
+  else                              fwShow('', '');
+}
+
+function fwPoll() {
+  return fetch('/api/ota', { cache: 'no-store' }).then(r => r.json()).then(o => { fwRender(o); return o; });
+}
+
+/* After an install the controller restarts: wait until it answers again,
+   then reload to show the version it came back with. */
+function fwAwaitRestart() {
+  fwShow('Restarting into the new firmware…', 'ok');
+  const t0 = Date.now();
+  const tick = () => fetch('/api/ota', { cache: 'no-store' }).then(r => r.json()).then(o => {
+    if (o.state === 'rebooting') throw new Error('not yet');
+    fwBusy = false; location.reload();
+  }).catch(() => {
+    if (Date.now() - t0 > 120000) {
+      fwBusy = false;
+      fwShow('The controller did not come back within 2 minutes. Reload this page.', 'err');
+      return;
+    }
+    setTimeout(tick, 2000);
+  });
+  setTimeout(tick, 4000);
+}
+
+function fwCheck() {
+  fetch('/api/ota/check', { method: 'POST' }).then(r => r.json()).then(j => {
+    if (!j.ok) fwShow(j.message, 'err');
+    const again = n => fwPoll().then(o => { if (o.state === 'checking' && n > 0) setTimeout(() => again(n - 1), 1000); });
+    setTimeout(() => again(20), 500);
+  }).catch(() => fwShow('Could not reach the controller.', 'err'));
+}
+
+function fwInstall() {
+  fwBusy = true;
+  fetch('/api/ota/install', { method: 'POST' }).then(r => r.json()).then(j => {
+    if (!j.ok) { fwBusy = false; fwShow(j.message, 'err'); fwPoll(); return; }
+    const watch = () => fetch('/api/ota', { cache: 'no-store' }).then(r => r.json()).then(o => {
+      const bar = document.getElementById('fw-progress');
+      bar.hidden = false; bar.value = o.progress || 0;
+      if (o.state === 'rebooting') { fwAwaitRestart(); return; }
+      if (o.state === 'installing') { fwShow((o.message || 'Installing') + ' — ' + (o.progress || 0) + ' %', 'ok'); setTimeout(watch, 1000); return; }
+      fwBusy = false; bar.hidden = true; fwRender(o);
+    }).catch(() => fwAwaitRestart());
+    setTimeout(watch, 500);
+  }).catch(() => { fwBusy = false; fwShow('Could not reach the controller.', 'err'); });
+}
+
+function fwUpload(file) {
+  document.getElementById('fw-file').value = '';
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.bin')) { fwShow('Choose a firmware .bin file.', 'err'); return; }
+  fwBusy = true;
+  const bar = document.getElementById('fw-progress');
+  bar.hidden = false; bar.value = 0;
+  for (const id of ['fw-check', 'fw-install', 'fw-upload']) document.getElementById(id).disabled = true;
+  fwShow('Switching the heater off and preparing…', 'ok');
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/ota/upload');
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const p = Math.round(e.loaded * 100 / e.total);
+    bar.value = p;
+    fwShow('Uploading ' + file.name + ' — ' + p + ' %', 'ok');
+  };
+  xhr.onload = () => {
+    let j = {};
+    try { j = JSON.parse(xhr.responseText); } catch (e) {}
+    if (j.ok) { fwAwaitRestart(); return; }
+    fwBusy = false; bar.hidden = true;
+    fwShow(j.message || 'Upload failed.', 'err');
+    fwPoll();
+  };
+  xhr.onerror = () => { fwBusy = false; bar.hidden = true; fwShow('Upload failed: connection lost.', 'err'); fwPoll(); };
+  xhr.send(file);
+}
+
+fwPoll().catch(() => fwShow('Could not read the firmware status.', 'err'));
+setInterval(() => { if (!fwBusy) fwPoll().catch(() => {}); }, 5000);
+</script>

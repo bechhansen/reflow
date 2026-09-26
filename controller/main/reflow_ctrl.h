@@ -51,8 +51,8 @@ esp_err_t reflow_ctrl_init(void);
 
 /* A profile run always covers the whole profile from its start, whatever the
    iron's temperature. On failure *reason (if given) is a short
-   machine-readable cause: "busy" (a run is active), "sensor", "plug" or
-   "profile" (invalid). */
+   machine-readable cause: "busy" (a run is active), "updating" (a firmware
+   update is installing), "sensor", "plug" or "profile" (invalid). */
 esp_err_t reflow_ctrl_start(const reflow_profile_t *profile, const char **reason);
 esp_err_t reflow_ctrl_start_step(float duty, float secs, float max_temp, const char **reason);
 esp_err_t reflow_ctrl_start_hold(float temp, const char **reason);

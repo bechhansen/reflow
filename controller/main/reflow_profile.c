@@ -1,4 +1,6 @@
 #include "reflow_profile.h"
+#include "web_files.h"
+#include <unistd.h>
 #include "esp_log.h"
 #include "esp_spiffs.h"
 #include "cJSON.h"
@@ -71,6 +73,35 @@ esp_err_t profile_init(void)
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "SPIFFS mount failed: %s", esp_err_to_name(err));
         return err;
+    }
+
+    /* The web UI used to live here (/spiffs/www); it is embedded in the
+       firmware now. Remove the old copy once, freeing the space. */
+    DIR *dir = opendir("/spiffs/www");
+    if (dir) {
+        struct dirent *ent;
+        char path[300];
+        int n = 0;
+        while ((ent = readdir(dir)) != NULL) {
+            snprintf(path, sizeof(path), "/spiffs/www/%s", ent->d_name);
+            if (unlink(path) == 0) n++;
+        }
+        closedir(dir);
+        if (n) ESP_LOGI(TAG, "Removed %d old web UI file(s) from SPIFFS", n);
+    }
+
+    /* A device with no profiles at all (new, or SPIFFS just formatted) gets
+       the defaults. Never touches existing profiles. */
+    if (profile_count() == 0) {
+        for (size_t i = 0; i < default_profiles_count; i++) {
+            char path[128];
+            snprintf(path, sizeof(path), "%s/%s", PROFILE_DIR, default_profiles[i].name);
+            FILE *f = fopen(path, "w");
+            if (!f) continue;
+            fwrite(default_profiles[i].data, 1, default_profiles[i].len, f);
+            fclose(f);
+        }
+        ESP_LOGI(TAG, "No profiles stored: wrote %d default profile(s)", (int)default_profiles_count);
     }
 
     size_t total = 0, used = 0;

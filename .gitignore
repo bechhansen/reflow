@@ -17,3 +17,8 @@ controller/test/plug_fsm/test_plug_fsm.dSYM/
 controller/test/reflow_algo/test_reflow_algo
 controller/test/reflow_algo/test_reflow_algo.dSYM/
 controller/tools/logs/
+controller/version.txt
+
+# Local editor / assistant settings
+.claude/
+.vscode/

@@ -4,6 +4,10 @@
 #include "zigbee_plug.h"
 #include "plug_ctrl.h"
 #include "wifi_manager.h"
+#include "ota_update.h"
+#include "web_files.h"
+#include "esp_app_desc.h"
+#include "sdkconfig.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_check.h"
@@ -139,6 +143,13 @@ static void telemetry_cb(void *arg)
     {
         char unit[2] = { s_temp_unit, 0 };
         cJSON_AddStringToObject(obj, "temp_unit", unit);
+    }
+    {
+        ota_status_t os;
+        ota_update_get_status(&os);
+        cJSON_AddStringToObject(obj, "ota_state", ota_state_str(os.state));
+        if (os.state == OTA_AVAILABLE) cJSON_AddStringToObject(obj, "ota_latest", os.latest);
+        if (os.state == OTA_INSTALLING) cJSON_AddNumberToObject(obj, "ota_progress", os.progress);
     }
     cJSON_AddStringToObject(obj, "wifi_mode",
                             wifi_manager_get_mode() == WIFI_MGR_STA ? "sta" : "ap");
@@ -581,47 +592,88 @@ static esp_err_t captive_generate_204(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* ── Static file server ───────────────────────────────────────────────────── */
+/* ── Static files (embedded in the firmware) ──────────────────────────────
+   The web UI is part of the app image (web_files.c, gzipped), so an update
+   carries it. Every file gets the firmware build hash as its ETag with
+   no-cache: the browser revalidates each load and gets a 304 until the
+   firmware changes, and never runs old UI code against new firmware. */
 
-static const char *mime_type(const char *path)
-{
-    const char *ext = strrchr(path, '.');
-    if (!ext) return "application/octet-stream";
-    if (strcmp(ext, ".html") == 0) return "text/html";
-    if (strcmp(ext, ".css")  == 0) return "text/css";
-    if (strcmp(ext, ".js")   == 0) return "application/javascript";
-    if (strcmp(ext, ".json") == 0) return "application/json";
-    return "application/octet-stream";
-}
+static char s_etag[24];
 
 static esp_err_t static_file_handler(httpd_req_t *req)
 {
-    char path[640];
     const char *uri = req->uri;
     if (strcmp(uri, "/") == 0) uri = "/index.html";
-    ESP_LOGI(TAG, "GET %s", uri);
-    snprintf(path, sizeof(path), "/spiffs/www%.512s", uri);
-
-    FILE *f = fopen(path, "r");
+    size_t ulen = strcspn(uri, "?#");
+    const embedded_file_t *f = NULL;
+    for (size_t i = 0; i < web_files_count; i++)
+        if (strlen(web_files[i].name) == ulen && strncmp(web_files[i].name, uri, ulen) == 0)
+            f = &web_files[i];
     if (!f) { httpd_resp_send_404(req); return ESP_OK; }
 
-    httpd_resp_set_type(req, mime_type(path));
-    /* Pages change with every SPIFFS flash: make the browser revalidate, or
-       it keeps running old UI code against new firmware. chart.js may cache. */
-    if (strcmp(mime_type(path), "text/html") == 0)
-        httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-
-    char *chunk = malloc(512);
-    if (!chunk) { fclose(f); return httpd_resp_send_500(req); }
-
-    size_t n;
-    while ((n = fread(chunk, 1, 512, f)) > 0) {
-        httpd_resp_send_chunk(req, chunk, n);
+    if (!s_etag[0]) {
+        char sha[17];
+        esp_app_get_elf_sha256(sha, sizeof(sha));
+        snprintf(s_etag, sizeof(s_etag), "\"%s\"", sha);
     }
-    httpd_resp_send_chunk(req, NULL, 0);
-    free(chunk);
-    fclose(f);
+    httpd_resp_set_hdr(req, "ETag", s_etag);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    char inm[32];
+    if (httpd_req_get_hdr_value_str(req, "If-None-Match", inm, sizeof(inm)) == ESP_OK &&
+        strcmp(inm, s_etag) == 0) {
+        httpd_resp_set_status(req, "304 Not Modified");
+        return httpd_resp_send(req, NULL, 0);
+    }
+    httpd_resp_set_type(req, f->mime);
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    return httpd_resp_send(req, (const char *)f->data, f->len);
+}
+
+/* ── REST: firmware updates ───────────────────────────────────────────────── */
+
+static esp_err_t api_ota_get(httpd_req_t *req)
+{
+    ota_status_t st;
+    ota_update_get_status(&st);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "state",      ota_state_str(st.state));
+    cJSON_AddStringToObject(o, "version",    st.version);
+    cJSON_AddStringToObject(o, "build_date", st.build_date);
+    cJSON_AddStringToObject(o, "latest",     st.latest);
+    cJSON_AddNumberToObject(o, "progress",   st.progress);
+    cJSON_AddNumberToObject(o, "last_check_s", st.last_check_s);
+    cJSON_AddStringToObject(o, "message",    st.message);
+    cJSON_AddStringToObject(o, "repo",       CONFIG_REFLOW_OTA_REPO);
+    char *str = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!str) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, str);
+    free(str);
     return ESP_OK;
+}
+
+static esp_err_t api_ota_check(httpd_req_t *req)
+{
+    esp_err_t e = ota_update_check();
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, e == ESP_OK ? "{\"ok\":true}"
+                                               : "{\"ok\":false,\"message\":\"An update is in progress\"}");
+}
+
+static esp_err_t api_ota_install(httpd_req_t *req)
+{
+    esp_err_t e = ota_update_install();
+    httpd_resp_set_type(req, "application/json");
+    if (e == ESP_OK) return httpd_resp_sendstr(req, "{\"ok\":true}");
+    return httpd_resp_sendstr(req, reflow_ctrl_is_active()
+        ? "{\"ok\":false,\"message\":\"A reflow run is active\"}"
+        : "{\"ok\":false,\"message\":\"No newer release to install\"}");
+}
+
+static esp_err_t api_ota_upload(httpd_req_t *req)
+{
+    return ota_update_upload(req);
 }
 
 /* ── Server start/stop ───────────────────────────────────────────────────── */
@@ -641,7 +693,10 @@ esp_err_t web_server_start(void)
        sits on "connecting..." forever while plain GETs still succeed. */
     cfg.max_open_sockets  = HTTPD_MAX_OPEN_SOCKETS;
     cfg.lru_purge_enable  = true;
-    cfg.max_uri_handlers  = 16;  /* default is 8; we register 15 */
+    cfg.max_uri_handlers  = 24;  /* default is 8; we register 19 */
+    /* A firmware upload streams ~1.6 MB; the first read waits while the
+       update slot is erased. */
+    cfg.recv_wait_timeout = 30;
     cfg.uri_match_fn      = httpd_uri_match_wildcard;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "httpd start");
@@ -680,6 +735,23 @@ esp_err_t web_server_start(void)
         .handler = api_run_trace_get,
     };
     httpd_register_uri_handler(s_server, &run_trace);
+
+    static const httpd_uri_t ota_get = {
+        .uri = "/api/ota", .method = HTTP_GET, .handler = api_ota_get,
+    };
+    static const httpd_uri_t ota_check = {
+        .uri = "/api/ota/check", .method = HTTP_POST, .handler = api_ota_check,
+    };
+    static const httpd_uri_t ota_install = {
+        .uri = "/api/ota/install", .method = HTTP_POST, .handler = api_ota_install,
+    };
+    static const httpd_uri_t ota_upload = {
+        .uri = "/api/ota/upload", .method = HTTP_POST, .handler = api_ota_upload,
+    };
+    httpd_register_uri_handler(s_server, &ota_get);
+    httpd_register_uri_handler(s_server, &ota_check);
+    httpd_register_uri_handler(s_server, &ota_install);
+    httpd_register_uri_handler(s_server, &ota_upload);
 
     static const httpd_uri_t settings_get = {
         .uri = "/api/settings", .method = HTTP_GET, .handler = api_settings_get,

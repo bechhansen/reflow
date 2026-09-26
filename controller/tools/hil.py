@@ -26,7 +26,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(HERE, "logs")
-PROFILE_DIR = os.path.join(HERE, "..", "spiffs_image", "profiles")
+PROFILE_DIR = os.path.join(HERE, "..", "profiles")
 
 T_FIELDS = ["ms", "state", "pt", "sp", "sp_ff", "temp", "tf", "slope",
             "u_ff", "p", "i", "u", "want", "forced", "plug", "pending"]

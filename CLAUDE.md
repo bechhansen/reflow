@@ -14,12 +14,14 @@ The firmware follows a reflow profile with a model feedforward + PI(D) controlle
 Reflow/
 ├── controller/          ESP-IDF firmware project (esp32c6)
 │   ├── main/            All application source (.c/.h)
-│   ├── spiffs_image/    SPIFFS filesystem image (flashed alongside firmware)
-│   │   ├── www/         Web UI: index.html, profiles.html, network.html, settings.html,
-│   │   │                theme.js (light/dark), units.js (°C/°F), chart.js
-│   │   └── profiles/    Default reflow profiles (.json)
-│   ├── partitions.csv   Custom partition table (factory 1.5 MB + SPIFFS 512 KB)
-│   └── sdkconfig.defaults  Baseline sdkconfig (Zigbee coordinator, SPIFFS, WebSocket)
+│   ├── web/             Web UI, embedded (gzipped) in the firmware at build time:
+│   │                    index.html, profiles.html, network.html, settings.html,
+│   │                    theme.js (light/dark), units.js (°C/°F), chart.js
+│   ├── profiles/        Default reflow profiles (.json), also embedded; written to
+│   │                    SPIFFS only on a device that has no profiles at all
+│   ├── tools/           hil.py (hardware-in-the-loop), embed_web.py (build step)
+│   ├── partitions.csv   8 MB: two 2 MB OTA app slots, nvs, SPIFFS 512 KB (profiles), Zigbee
+│   └── sdkconfig.defaults  Baseline sdkconfig (8 MB flash, rollback, -Os, Zigbee, WebSocket)
 ├── hardware/
 │   ├── enclosure/       3D-printed ESP32-C6 board enclosure
 │   ├── iron_stand/      3D-printed cradle for inverted iron
@@ -42,10 +44,11 @@ idf.py set-target esp32c6
 # Configure Wi-Fi SSID/password and I2C pins (optional — can also be set via NVS at runtime)
 idf.py menuconfig   # → Reflow Controller
 
-# Build (also generates SPIFFS image from spiffs_image/)
+# Build (the web UI and default profiles are embedded in the app)
 idf.py build
 
-# Flash firmware + SPIFFS image
+# Flash over USB: bootloader, partition table, otadata, app. Never SPIFFS, so
+# saved profiles survive. After the first flash, updates go over Wi-Fi.
 idf.py flash
 
 # Monitor serial output
@@ -70,7 +73,8 @@ All source lives in `controller/main/`. Key modules:
 | `reflow_algo.c/h` | Pure control law: feedforward + PI(D), profile clock hold, coast guard, dwell-limited sigma-delta output, safety faults. No ESP-IDF deps; host-tested |
 | `reflow_profile.c/h` | JSON profile load/save from SPIFFS, on top of `reflow_curve` |
 | `reflow_ctrl.c/h` | Controller shell: 500 ms task that samples the MLX90614, steps `reflow_algo`, switches the plug, logs `@`-lines, holds run state, tuning params (NVS `ctrl`), run trace buffer |
-| `web_server.c/h` | HTTP server, WebSocket broadcast, REST API |
+| `web_server.c/h` | HTTP server (embedded web UI, ETag/no-cache), WebSocket broadcast, REST API |
+| `ota_update.c/h` | Firmware updates over Wi-Fi: GitHub release check, install, upload, confirm/rollback |
 | `wifi_manager.c/h` | STA with AP fallback, NVS credential storage |
 
 ### Control Algorithm
@@ -218,7 +222,42 @@ JSON with a `waypoints` array. The controller linearly interpolates between wayp
 }
 ```
 
-Profiles are stored in SPIFFS at `/spiffs/profiles/<name>.json`. Default profiles (SAC305, Sn63Pb37) are pre-loaded from `spiffs_image/profiles/`.
+Profiles are stored in SPIFFS at `/spiffs/profiles/<name>.json`. The defaults in `controller/profiles/` are embedded in the firmware and written only when SPIFFS has no profiles at all (a new device); existing profiles are never touched.
+
+## Firmware updates (OTA) and releases
+
+Two 2 MB app slots (`ota_0`, `ota_1`). An update is written into the idle slot
+while the running one is untouched, verified, and booted. The new firmware
+confirms itself after serving the web UI for 30 s, or at once when another
+update is requested from the web UI; if it resets before confirming, the
+bootloader returns to the previous slot (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`).
+nvs, spiffs and zb_* never move, so updates keep Wi-Fi, tuning, units,
+profiles and the Zigbee pairing.
+
+- **GitHub**: `ota_update.c` checks `https://api.github.com/repos/<REFLOW_OTA_REPO>/releases/latest`
+  60 s after boot, every 24 h and on request (STA mode). GitHub's "latest"
+  excludes pre-releases, and the device also takes only a tag that is exactly
+  `vX.Y.Z`. It offers the release's `reflow-controller.bin`; nothing installs
+  until the user clicks Install. Needs the repository to be public.
+- **Upload**: `POST /api/ota/upload` with a `.bin` body, any build of this
+  project (checked by `project_name`), including alpha/beta.
+- **Safety**: refused while a run is active; a run is refused while an update
+  installs (`updating`); the heater is switched off and confirmed first.
+- **REST**: `GET /api/ota` (state, version, build date, latest, progress,
+  last check, message), `POST /api/ota/check`, `POST /api/ota/install`,
+  `POST /api/ota/upload`. Telemetry adds `ota_state`, `ota_latest`, `ota_progress`.
+- **Test options** (Kconfig, never in a release): `REFLOW_OTA_CHECK_URL`
+  (a stand-in server; with `CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP` for plain HTTP)
+  and `REFLOW_OTA_TEST_NO_CONFIRM` (a build that never confirms, to test rollback).
+
+**Releasing**: tag `main` and push the tag, e.g. `git tag v1.2.0 && git push origin v1.2.0`.
+The workflow (`.github/workflows/esp32-build.yml`) runs the host tests and
+builds; the firmware version is the tag (`controller/version.txt`, written by
+CI). `vX.Y.Z` makes a production release, which the controllers offer as an update;
+`vX.Y.Z-alpha*/-beta*/-rc*` makes a pre-release for manual upload only. Every
+other push is built and kept as a 30-day artifact. Assets: `reflow-controller.bin`
+(OTA/upload) and `reflow-<version>-usb.zip` (first-time or recovery USB flash,
+with `FLASH.txt`). Locally, a changed `version.txt` needs `idf.py reconfigure`.
 
 ## WebSocket API
 

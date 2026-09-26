@@ -5,4 +5,6 @@ cmake_minimum_required(VERSION 3.16)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(controller)
 
-spiffs_create_partition_image(spiffs spiffs_image FLASH_IN_PROJECT)
+# SPIFFS holds only the user's profiles and is not flashed from the build: the
+# web UI and the default profiles are embedded in the app (main/CMakeLists.txt),
+# so neither USB flashing nor an over-the-air update touches saved profiles.

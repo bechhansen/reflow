@@ -99,6 +99,7 @@ header{
   background:var(--surface);color:var(--muted);border:1px solid var(--border);
   border-radius:4px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
 .hdr-btn:hover{color:var(--text);border-color:var(--hover-border)}
+.hdr-btn[hidden]{display:none}   /* display:inline-flex would override [hidden] */
 
 /* ── Layout ── */
 main{
@@ -294,6 +295,7 @@ input[type=file]{
   <div id="status-bar">
     <span id="ws-dot" title="Connection to the controller"></span>
     <span id="wifi-info">connecting…</span>
+    <a class="hdr-btn" id="update-note" href="/settings.html" hidden></a>
     <a class="hdr-btn" href="/settings.html">⚙ Settings</a>
     <!-- theme-btn: theme.js labels it with the theme it switches to -->
     <button class="hdr-btn theme-btn" type="button" onclick="reflowTheme.toggle()">Theme</button>
@@ -521,6 +523,17 @@ const isActive = st => st === 'running' || st === 'cooling';
 function handleTelemetry(d) {
   /* Temperature stats */
   reflowUnits.check(d.temp_unit);   /* reloads if the unit was changed elsewhere */
+  /* Firmware update notice (details and Install on the Settings page). */
+  const note = document.getElementById('update-note');
+  if (d.ota_state === 'available' && d.ota_latest) {
+    note.textContent = '⬆ Update ' + d.ota_latest + ' available'; note.hidden = false;
+  } else if (d.ota_state === 'installing') {
+    note.textContent = 'Updating firmware… ' + (d.ota_progress || 0) + ' %'; note.hidden = false;
+  } else if (d.ota_state === 'rebooting') {
+    note.textContent = 'Restarting…'; note.hidden = false;
+  } else {
+    note.hidden = true;
+  }
   document.getElementById('temp-big').textContent = d.sensor_ok ? reflowUnits.fmt(d.temp, 1) : '—';
   /* Draw the curve for the profile the DEVICE is running, not whatever the
      dropdown happens to show. Otherwise a run started elsewhere (another
@@ -949,6 +962,7 @@ function stopReflow() { send({ type: 'stop' }); }
 function handleRunResult(m) {
   const reasons = {
     busy:      'a run is already active',
+    updating:  'a firmware update is installing',
     sensor:    'the sensor is not reading',
     plug:      'the plug is not paired, or its state is not known yet',
     profile:   'the profile is invalid',

@@ -27,4 +27,32 @@ menu "Reflow Controller"
         default 10
         range 1 240
 
+    menu "Firmware updates (OTA)"
+
+        config REFLOW_OTA_REPO
+            string "GitHub repository (owner/name)"
+            default "bechhansen/reflow"
+            help
+                The device checks this repository's latest release (production
+                tags vX.Y.Z only; GitHub's "latest" excludes pre-releases) and
+                offers its reflow-controller.bin asset as an update.
+
+        config REFLOW_OTA_CHECK_URL
+            string "Release check URL override (testing)"
+            default ""
+            help
+                Leave empty for https://api.github.com/repos/<repo>/releases/latest.
+                For testing, point it at a server that returns the same JSON
+                (tag_name, assets[].name/browser_download_url).
+
+        config REFLOW_OTA_TEST_NO_CONFIRM
+            bool "TEST ONLY: never confirm a new firmware (forces rollback)"
+            default n
+            help
+                A build with this set boots but never marks itself valid, so
+                the bootloader returns to the previous firmware on the next
+                reset. Used to test rollback; never release such a build.
+
+    endmenu
+
 endmenu

@@ -245,7 +245,9 @@ profiles and the Zigbee pairing.
 - **Upload**: `POST /api/ota/upload` with a `.bin` body, any build of this
   project (checked by `project_name`), including alpha/beta.
 - **Safety**: refused while a run is active; a run is refused while an update
-  installs (`updating`); the heater is switched off and confirmed first.
+  installs (`updating`); the heater is switched off first, and the update waits
+  up to 15 s for the plug to confirm it. A plug that does not answer (paired
+  but unplugged) does not block an update: after 5 s of Unknown it goes ahead.
 - **REST**: `GET /api/ota` (state, version, build date, latest, progress,
   last check, message), `POST /api/ota/check`, `POST /api/ota/install`,
   `POST /api/ota/upload`. Telemetry adds `ota_state`, `ota_latest`, `ota_progress`.

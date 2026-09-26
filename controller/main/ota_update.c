@@ -31,7 +31,8 @@ static const char *TAG = "ota";
 #define CHECK_PERIOD_MS   (24 * 3600 * 1000)
 #define CONFIRM_AFTER_US  (30 * 1000000LL)
 #define MAX_JSON          (32 * 1024)
-#define HEATER_OFF_WAIT_S 15
+#define HEATER_OFF_WAIT_S 15   /* longest wait for the plug to confirm OFF */
+#define UNKNOWN_WAIT_S    5    /* ... when it does not answer at all */
 
 static portMUX_TYPE      s_mux = portMUX_INITIALIZER_UNLOCKED;
 static ota_status_t      s_st;
@@ -122,7 +123,10 @@ static bool is_newer(const char *candidate, const char *running)
 
 static bool confirm_running(const char *why);
 
-/* Heater off, and confirmed, unless there is no plug to confirm it with. */
+/* Heater off, and confirmed if the plug answers. Only a run blocks an
+   update: with no run active, an unreachable plug (paired but unplugged or out
+   of range) is no reason to refuse. The update cannot make its state worse, and
+   after the reboot the controller keeps sending OFF until the plug confirms. */
 static esp_err_t prepare_install(void)
 {
     if (reflow_ctrl_is_active()) return ESP_ERR_INVALID_STATE;
@@ -135,15 +139,19 @@ static esp_err_t prepare_install(void)
     }
     set_state(OTA_INSTALLING, "Switching the heater off");
     reflow_ctrl_stop();                       /* force-off until confirmed */
+    int unknown = 0;
     for (int i = 0; i < HEATER_OFF_WAIT_S * 4; i++) {
         plug_status_t ps;
         plug_ctrl_get_status(&ps);
         if (!ps.available) return ESP_OK;     /* no plug: nothing to switch */
         if (ps.state == PLUG_OFF && !ps.pending) return ESP_OK;
+        /* Not answering at all: give it a few polls, then go on. */
+        unknown = (ps.state == PLUG_UNKNOWN && !ps.pending) ? unknown + 1 : 0;
+        if (unknown >= UNKNOWN_WAIT_S * 4) break;
         vTaskDelay(pdMS_TO_TICKS(250));
     }
-    set_state(OTA_ERROR, "The heater could not be confirmed off; update not started");
-    return ESP_ERR_TIMEOUT;
+    ESP_LOGW(TAG, "heater not confirmed off (plug not answering); no run active, updating anyway");
+    return ESP_OK;
 }
 
 static void restart_soon(void *arg) { esp_restart(); }
@@ -332,7 +340,7 @@ esp_err_t ota_update_upload(httpd_req_t *req)
     if (!part)                      return upload_reply(req, false, "No update slot (partition table without OTA)");
     if (req->content_len == 0 || req->content_len > part->size)
                                     return upload_reply(req, false, "File is empty or larger than the update slot");
-    if (prepare_install() != ESP_OK) return upload_reply(req, false, "The heater could not be confirmed off");
+    if (prepare_install() != ESP_OK) return upload_reply(req, false, "A reflow run is active, or this test build cannot update");
 
     set_state(OTA_INSTALLING, "Writing uploaded firmware");
     esp_ota_handle_t h;

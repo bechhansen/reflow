@@ -420,6 +420,7 @@ let wantedCurve = null;       /* profile whose curve SHOULD be on the chart */
 let drawnCurve = null;        /* profile whose curve IS on the chart */
 let fetchingProfile = null;   /* in-flight fetch, to avoid duplicates */
 let traceRun = null;          /* run_id the Actual trace belongs to */
+let syncedRun = null;         /* run_id the profile selector was last synced to */
 
 /* ── Tooltips ── */
 function initTips() {
@@ -541,19 +542,26 @@ function handleTelemetry(d) {
      — which comes from the running profile — contradicts the picture. */
   const testRun = d.profile === 'step' || d.profile === 'hold';   /* no curve */
   if (d.profile && !testRun) {
-    /* Keep the selector in step every frame: telemetry can arrive before the
-       profile list has loaded, and a one-shot sync would then never happen.
-       It is also LOCKED while a run is active — changing profiles mid-run
-       cannot affect the run, and letting it redraw the target curve made a
-       correct run look broken. */
+    /* While a run is active, keep the selector in step every frame: telemetry
+       can arrive before the profile list has loaded, and a one-shot sync would
+       then never happen. It is also LOCKED — changing profiles mid-run cannot
+       affect the run, and letting it redraw the target curve made a correct
+       run look broken. Once the run has ended (d.profile still names it), sync
+       only once per run, so a page opened afterwards shows the finished run
+       but the user can then pick another profile. */
     const sel = document.getElementById('profile-select');
-    if (sel.value !== d.profile &&
-        Array.from(sel.options).some(o => o.value === d.profile)) {
-      sel.value = d.profile;
+    const active = isActive(d.state);
+    if (active || d.run_id !== syncedRun) {
+      if (Array.from(sel.options).some(o => o.value === d.profile)) {
+        if (sel.value !== d.profile) sel.value = d.profile;
+        syncedRun = d.run_id;
+        showCurve(d.profile);
+      } else if (active) {
+        showCurve(d.profile);                 /* list not loaded yet */
+      }
     }
-    sel.disabled = isActive(d.state);
+    sel.disabled = active;
     sel.title = sel.disabled ? 'Locked while a run is in progress' : '';
-    showCurve(d.profile);
   } else {
     const sel = document.getElementById('profile-select');
     sel.disabled = isActive(d.state);

@@ -109,6 +109,20 @@ static bool is_production(const char *tag)
     return sscanf(tag, "%d.%d.%d%n", &a, &b, &c, &n) == 3 && tag[n] == '\0';
 }
 
+/* A pre-release of its X.Y.Z: "v1.2.3-beta2", "v1.2.3-rc1-4-gabc". A local
+   build past a release ("v1.2.3-4-gabc") is not one. */
+static bool is_prerelease(const char *s)
+{
+    int a, b, c, n = 0;
+    if (*s == 'v' || *s == 'V') s++;
+    if (sscanf(s, "%d.%d.%d%n", &a, &b, &c, &n) != 3 || s[n] != '-') return false;
+    s += n + 1;
+    return !strncmp(s, "alpha", 5) || !strncmp(s, "beta", 4) || !strncmp(s, "rc", 2);
+}
+
+/* Newer by X.Y.Z; at equal numbers a production release is newer than a
+   pre-release of it (v1.2.3 > v1.2.3-beta2), so beta testers are offered the
+   final release. A local build counts as its X.Y.Z. */
 static bool is_newer(const char *candidate, const char *running)
 {
     int a[3], b[3];
@@ -116,7 +130,7 @@ static bool is_newer(const char *candidate, const char *running)
     parse_version(running, b);
     for (int i = 0; i < 3; i++)
         if (a[i] != b[i]) return a[i] > b[i];
-    return false;
+    return is_prerelease(running) && !is_prerelease(candidate);
 }
 
 /* ── Safety before writing ─────────────────────────────────────────── */

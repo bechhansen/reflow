@@ -241,7 +241,9 @@ profiles and the Zigbee pairing.
   60 s after boot, every 24 h and on request (STA mode). GitHub's "latest"
   excludes pre-releases, and the device also takes only a tag that is exactly
   `vX.Y.Z`. It offers the release's `reflow-controller.bin`; nothing installs
-  until the user clicks Install. Needs the repository to be public.
+  until the user clicks Install. It is offered when newer by X.Y.Z; at equal
+  numbers a running alpha/beta/rc is older (v1.2.0 is offered to v1.2.0-beta2),
+  a local build (`v1.2.0-3-gabc`) is not. Needs the repository to be public.
 - **Upload**: `POST /api/ota/upload` with a `.bin` body, any build of this
   project (checked by `project_name`), including alpha/beta.
 - **Safety**: refused while a run is active; a run is refused while an update

@@ -15,7 +15,8 @@ Reflow/
 ├── controller/          ESP-IDF firmware project (esp32c6)
 │   ├── main/            All application source (.c/.h)
 │   ├── spiffs_image/    SPIFFS filesystem image (flashed alongside firmware)
-│   │   ├── www/         Web UI (index.html)
+│   │   ├── www/         Web UI: index.html, profiles.html, network.html, settings.html,
+│   │   │                theme.js (light/dark), units.js (°C/°F), chart.js
 │   │   └── profiles/    Default reflow profiles (.json)
 │   ├── partitions.csv   Custom partition table (factory 1.5 MB + SPIFFS 512 KB)
 │   └── sdkconfig.defaults  Baseline sdkconfig (Zigbee coordinator, SPIFFS, WebSocket)
@@ -250,6 +251,16 @@ the UI can backfill the chart when opened mid-run. The chart shows the profile
 along the top (the current one bold), and below it a heater strip: grey
 blocks where the heater was confirmed on, with the requested power as a line.
 Everything is distinguishable without colour (pattern, fill, weight).
+
+**Theme**: every page follows the browser's light/dark setting; the theme
+button overrides it per browser (`localStorage`), and choosing what the browser
+prefers returns to following it (`theme.js`, CSS variables with a dark set).
+
+**Temperature unit**: `GET/POST /api/settings` `{"temp_unit":"C"|"F"}`,
+device-wide in NVS namespace `ui` (default °C), also in telemetry as
+`temp_unit`. Only the web pages convert (`units.js`); firmware, stored
+profiles, console and logs are always °C. A page whose unit changes elsewhere
+reloads.
 
 **Device → browser (plug change finished, or `plug_toggle` rejected — the latter to the sender only):**
 ```json

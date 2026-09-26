@@ -5,11 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Reflow Controller</title>
 <link rel="icon" href="data:,">
+<script src="/theme.js"></script>
+<script src="/units.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;overflow:hidden;background:#f4f3f0;color:#1a1a1a;font-family:system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
 
 :root{
+  --card-border:transparent;
   --blue:#2558a0;
   --orange:#c05c28;
   --red:#b03030;
@@ -22,6 +25,56 @@ html,body{height:100%;overflow:hidden;background:#f4f3f0;color:#1a1a1a;font-fami
   --muted:#737373;
   --faint:#b0aba4;
   --shadow:0 1px 3px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.04);
+  --primary-bg:#2558a0; --primary-hover:#1d4a8a;
+  --danger-bg:#b03030;  --danger-hover:#962626;
+  --hover-surface:#faf9f7; --hover-border:#c8c4be; --amber-hover:#fdf6e8;
+  --badge-on:#edf7f2; --badge-off:#fdf6e8; --badge-bad:#fef2f2;
+  --badge-unknown:#f3f4f6; --badge-pending:#eef4fd;
+  --pair-bg:#fdfbf4; --pair-border:#e0d090; --warn-bg:#fef2f2; --success:#2e7d32;
+  --focus-ring:rgba(37,88,160,.12); --backdrop:rgba(0,0,0,.35);
+  /* chart */
+  --grid:#eae7e2; --axis:#e2dfd9; --tick:#b0aba4; --legend:#737373;
+  --phase-rule:#c9c4bc; --phase-text:#8a857e; --phase-now:#333;
+  --heater-fill:rgba(110,110,110,.55); --heater-line:#444; --power-line:#111;
+  color-scheme:light;
+}
+/* Dark: while no theme is chosen, follow the browser; a chosen theme wins
+   (theme.js sets data-theme). The same block twice, once per route. */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --blue:#7aa4e6; --orange:#e8895a; --red:#e57373; --green:#5cbf8a; --amber:#dcae52;
+    --bg:#000; --surface:#2c2c2c; --border:#5e5e5e; --text:#f5f5f5; --card-border:#5e5e5e;
+    --muted:#cfcfcf; --faint:#b4b4b4;
+    --shadow:0 1px 3px rgba(0,0,0,.6);
+    --primary-bg:#3868b3; --primary-hover:#4677c4;
+    --danger-bg:#a83a3a;  --danger-hover:#bd4a4a;
+    --hover-surface:#383838; --hover-border:#8a8a8a; --amber-hover:#2e2512;
+    --badge-on:#15301f; --badge-off:#33290f; --badge-bad:#3a1b1b;
+    --badge-unknown:#333; --badge-pending:#172a45;
+    --pair-bg:#262214; --pair-border:#5a4d20; --warn-bg:#3a1b1b; --success:#5cbf66;
+    --focus-ring:rgba(122,164,230,.3); --backdrop:rgba(0,0,0,.6);
+    --grid:#585858; --axis:#777; --tick:#8c8c8c; --legend:#a3a3a3;
+    --phase-rule:#808080; --phase-text:#b4b4b4; --phase-now:#f0f0f0;
+    --heater-fill:rgba(175,175,175,.45); --heater-line:#c8c8c8; --power-line:#f2f2f2;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --blue:#7aa4e6; --orange:#e8895a; --red:#e57373; --green:#5cbf8a; --amber:#dcae52;
+  --bg:#000; --surface:#2c2c2c; --border:#5e5e5e; --text:#f5f5f5; --card-border:#5e5e5e;
+  --muted:#cfcfcf; --faint:#b4b4b4;
+  --shadow:0 1px 3px rgba(0,0,0,.6);
+  --primary-bg:#3868b3; --primary-hover:#4677c4;
+  --danger-bg:#a83a3a;  --danger-hover:#bd4a4a;
+  --hover-surface:#383838; --hover-border:#8a8a8a; --amber-hover:#2e2512;
+  --badge-on:#15301f; --badge-off:#33290f; --badge-bad:#3a1b1b;
+  --badge-unknown:#333; --badge-pending:#172a45;
+  --pair-bg:#262214; --pair-border:#5a4d20; --warn-bg:#3a1b1b; --success:#5cbf66;
+  --focus-ring:rgba(122,164,230,.3); --backdrop:rgba(0,0,0,.6);
+  --grid:#585858; --axis:#777; --tick:#8c8c8c; --legend:#a3a3a3;
+  --phase-rule:#808080; --phase-text:#b4b4b4; --phase-now:#f0f0f0;
+  --heater-fill:rgba(175,175,175,.45); --heater-line:#c8c8c8; --power-line:#f2f2f2;
+  color-scheme:dark;
 }
 
 /* ── Header ── */
@@ -41,6 +94,11 @@ header{
   display:inline-block;transition:background .3s;flex-shrink:0;
 }
 #ws-dot.connected{background:var(--green)}
+.hdr-btn{
+  margin-left:10px;padding:4px 9px;min-height:28px;font-size:.74rem;font-family:inherit;
+  background:var(--surface);color:var(--muted);border:1px solid var(--border);
+  border-radius:4px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.hdr-btn:hover{color:var(--text);border-color:var(--hover-border)}
 
 /* ── Layout ── */
 main{
@@ -77,7 +135,7 @@ main{
 @media(min-width:768px){#side-panel{border-left:none}}
 
 /* ── Cards ── */
-.card{background:var(--surface);border-radius:6px;box-shadow:var(--shadow);margin-bottom:8px;overflow:hidden}
+.card{background:var(--surface);border:1px solid var(--card-border);border-radius:6px;box-shadow:var(--shadow);margin-bottom:8px;overflow:hidden}
 .card-header{
   padding:12px 14px 0;font-size:.65rem;font-weight:600;
   text-transform:uppercase;letter-spacing:.1em;color:var(--faint);
@@ -90,7 +148,7 @@ select,input[type=text],input[type=password]{
   color:var(--text);padding:7px 10px;border-radius:4px;font-size:.84rem;
   outline:none;transition:border-color .15s;
 }
-select:focus,input:focus{border-color:var(--blue);outline:2px solid rgba(37,88,160,.12);outline-offset:-1px}
+select:focus,input:focus{border-color:var(--blue);outline:2px solid var(--focus-ring);outline-offset:-1px}
 input[type=file]{
   width:100%;font-size:.78rem;color:var(--muted);
   background:var(--bg);border:1px dashed var(--border);
@@ -106,14 +164,14 @@ input[type=file]{
 }
 .btn:disabled{opacity:.35;cursor:default;pointer-events:none}
 
-.btn-primary  {background:var(--blue);color:#fff;border-color:var(--blue)}
-.btn-primary:hover{background:#1d4a8a}
-.btn-danger   {background:var(--red);color:#fff;border-color:var(--red)}
-.btn-danger:hover{background:#962626}
+.btn-primary  {background:var(--primary-bg);color:#fff;border-color:var(--primary-bg)}
+.btn-primary:hover{background:var(--primary-hover)}
+.btn-danger   {background:var(--danger-bg);color:#fff;border-color:var(--danger-bg)}
+.btn-danger:hover{background:var(--danger-hover)}
 .btn-secondary{background:var(--surface);color:var(--text);border-color:var(--border)}
-.btn-secondary:hover{border-color:#c8c4be;background:#faf9f7}
+.btn-secondary:hover{border-color:var(--hover-border);background:var(--hover-surface)}
 .btn-amber    {color:var(--amber);border-color:var(--amber)}
-.btn-amber:hover{background:#fdf6e8}
+.btn-amber:hover{background:var(--amber-hover)}
 
 .row{display:flex;gap:6px;align-items:center;margin-bottom:6px}
 .row:last-child{margin-bottom:0}
@@ -124,11 +182,11 @@ input[type=file]{
   padding:3px 8px;border-radius:3px;font-size:.72rem;font-weight:500;
 }
 .badge::before{content:'';width:5px;height:5px;border-radius:50%;background:currentColor;flex-shrink:0}
-.badge-on      {background:#edf7f2;color:var(--green)}
-.badge-off     {background:#fdf6e8;color:var(--amber)}
-.badge-unpaired{background:#fef2f2;color:var(--red)}
-.badge-unknown {background:#f3f4f6;color:var(--muted)}
-.badge-pending {background:#eef4fd;color:var(--blue)}
+.badge-on      {background:var(--badge-on);color:var(--green)}
+.badge-off     {background:var(--badge-off);color:var(--amber)}
+.badge-unpaired{background:var(--badge-bad);color:var(--red)}
+.badge-unknown {background:var(--badge-unknown);color:var(--muted)}
+.badge-pending {background:var(--badge-pending);color:var(--blue)}
 
 /* ── Run state label ── */
 #run-state{font-size:.77rem;color:var(--faint);margin-top:4px}
@@ -139,7 +197,7 @@ input[type=file]{
 
 /* ── Pairing section ── */
 #pairing-overlay{
-  display:none;background:#fdfbf4;border:1px solid #e0d090;
+  display:none;background:var(--pair-bg);border:1px solid var(--pair-border);
   border-radius:4px;padding:12px;margin-top:8px;text-align:center;
 }
 #pairing-overlay.active{display:block}
@@ -180,7 +238,7 @@ input[type=file]{
 #ambient-warning{
   display:none;margin:8px 10px 0;padding:8px 10px;border-radius:4px;
   font-size:.76rem;line-height:1.4;
-  background:#fef2f2;border:1px solid var(--red);
+  background:var(--warn-bg);border:1px solid var(--red);
   border-left:3px solid var(--red);color:var(--red)}
 #ambient-warning.show{display:block}
 
@@ -194,11 +252,11 @@ input[type=file]{
   border:1px solid var(--border);border-left:3px solid var(--muted);
   border-radius:6px;box-shadow:var(--shadow);padding:9px 12px;
   font-size:.8rem;line-height:1.35;cursor:pointer;animation:toast-in .18s ease-out}
-.toast.success{border-left-color:#2e7d32}
+.toast.success{border-left-color:var(--success)}
 .toast.error{border-left-color:var(--red)}
 @keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 #modal-backdrop{
-  position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.35);
+  position:fixed;inset:0;z-index:70;background:var(--backdrop);
   display:flex;align-items:center;justify-content:center;padding:20px}
 /* An id selector outranks the UA's [hidden]{display:none}, so without this the
    dialog is permanently visible (and empty, with no handlers bound). */
@@ -234,8 +292,11 @@ input[type=file]{
     Reflow Controller
   </div>
   <div id="status-bar">
-    <span id="ws-dot"></span>
+    <span id="ws-dot" title="Connection to the controller"></span>
     <span id="wifi-info">connecting…</span>
+    <a class="hdr-btn" href="/settings.html">⚙ Settings</a>
+    <!-- theme-btn: theme.js labels it with the theme it switches to -->
+    <button class="hdr-btn theme-btn" type="button" onclick="reflowTheme.toggle()">Theme</button>
   </div>
 </header>
 
@@ -246,7 +307,7 @@ input[type=file]{
     <div id="graph-stats">
       <div>
         <div class="stat-label">Temperature</div>
-        <div class="stat-value" id="temp-big">— °C</div>
+        <div class="stat-value" id="temp-big">—</div>
       </div>
       <div>
         <div class="stat-label">Sensor</div>
@@ -433,6 +494,7 @@ function connect() {
   ws = new WebSocket('ws://' + location.host + '/ws');
   ws.onopen = () => {
     document.getElementById('ws-dot').className = 'connected';
+    document.getElementById('wifi-info').textContent = '';
     loadProfiles();
   };
   ws.onclose = () => {
@@ -457,12 +519,9 @@ function handleMessage(msg) {
 const isActive = st => st === 'running' || st === 'cooling';
 
 function handleTelemetry(d) {
-  /* Wi-Fi */
-  document.getElementById('wifi-info').textContent =
-    d.wifi_mode === 'ap' ? 'AP · 192.168.4.1' : 'STA · ' + (d.ip || '');
-
   /* Temperature stats */
-  document.getElementById('temp-big').textContent = d.sensor_ok ? d.temp.toFixed(1) + ' °C' : '—';
+  reflowUnits.check(d.temp_unit);   /* reloads if the unit was changed elsewhere */
+  document.getElementById('temp-big').textContent = d.sensor_ok ? reflowUnits.fmt(d.temp, 1) : '—';
   /* Draw the curve for the profile the DEVICE is running, not whatever the
      dropdown happens to show. Otherwise a run started elsewhere (another
      browser, the API) is plotted against the wrong curve, and the phase label
@@ -502,15 +561,15 @@ function handleTelemetry(d) {
   const ambWarn = document.getElementById('ambient-warning');
   if (typeof d.ambient === 'number' && d.sensor_ok) {
     const a = d.ambient;
-    ambEl.textContent = a.toFixed(1) + ' °C';
+    ambEl.textContent = reflowUnits.fmt(a, 1);
     ambEl.className = 'stat-value' + (a >= 80 ? ' crit' : a >= 65 ? ' warn' : '');
     if (a >= 80) {
-      ambWarn.textContent = 'Sensor at ' + a.toFixed(1) + ' °C — the MLX90614 is rated to '
-        + '85 °C ambient. Readings are unreliable and the sensor risks damage. '
+      ambWarn.textContent = 'Sensor at ' + reflowUnits.fmt(a, 1) + ' — the MLX90614 is rated to '
+        + reflowUnits.fmt(85) + ' ambient. Readings are unreliable and the sensor risks damage. '
         + 'Stop the run and increase the gap between sensor and soleplate.';
       ambWarn.classList.add('show');
     } else if (a >= 65) {
-      ambWarn.textContent = 'Sensor at ' + a.toFixed(1) + ' °C, approaching its 85 °C limit. '
+      ambWarn.textContent = 'Sensor at ' + reflowUnits.fmt(a, 1) + ', approaching its ' + reflowUnits.fmt(85) + ' limit. '
         + 'Consider more clearance or shielding above the plate.';
       ambWarn.classList.add('show');
     } else {
@@ -532,7 +591,7 @@ function handleTelemetry(d) {
   runStats.hidden = d.state === 'idle';
   if (!runStats.hidden) {
     document.getElementById('setpoint-value').textContent =
-      d.setpoint > 0 ? d.setpoint.toFixed(1) + ' °C' : '—';
+      d.setpoint > 0 ? reflowUnits.fmt(d.setpoint, 1) : '—';
     document.getElementById('power-value').textContent =
       active ? Math.round(d.power * 100) + ' %' : 'off';
     const heldS = d.elapsed - d.profile_t;
@@ -623,7 +682,7 @@ function addTracePoint(d, active) {
       if (t.run_id !== id || traceRun !== id) return;
       const last  = t.points.length ? t.points[t.points.length - 1][0] : -1;
       const newer = ds => ds.data.filter(p => p.x > last);
-      act.data   = t.points.map(p => ({ x: p[0], y: p[1] })).concat(newer(act));
+      act.data   = t.points.map(p => ({ x: p[0], y: reflowUnits.fromC(p[1]) })).concat(newer(act));
       heat.data  = t.points.map(p => ({ x: p[0], y: p[3] < 0 ? null : p[3] })).concat(newer(heat));
       power.data = t.points.map(p => ({ x: p[0], y: p[4] })).concat(newer(power));
       fitTraceAxis();
@@ -632,7 +691,7 @@ function addTracePoint(d, active) {
   }
   chart.$phaseNow = active && curve ? d.profile_t : null;
   if (!active || !d.sensor_ok) { chart.update('none'); return; }
-  act.data.push({ x: d.elapsed, y: d.temp });
+  act.data.push({ x: d.elapsed, y: reflowUnits.fromC(d.temp) });
   /* Unknown heater state is a gap, never a guess. */
   heat.data.push({ x: d.elapsed, y: d.plug_state === 'on' ? 1 : d.plug_state === 'off' ? 0 : null });
   power.data.push({ x: d.elapsed, y: d.power });
@@ -672,6 +731,16 @@ const phasePlugin = {
     lg.$phaseBand = true;
   },
   afterDatasetsDraw(c) {
+    /* A solid rule between the temperature plot and the heater strip, so the
+       strip reads as its own section (always, also without a profile). */
+    {
+      const x = c.scales.x, y = c.scales.y, ctx = c.ctx;
+      ctx.save();
+      ctx.strokeStyle = chartTheme.axis;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x.left, y.bottom + 0.5); ctx.lineTo(x.right, y.bottom + 0.5); ctx.stroke();
+      ctx.restore();
+    }
     const ph = c.$phases;
     if (!ph || !ph.length) return;
     const x = c.scales.x, y = c.scales.y, ctx = c.ctx;
@@ -679,7 +748,7 @@ const phasePlugin = {
     const top = y.top - PHASE_ROW;
     ctx.save();
     /* The row's frame; its bottom edge is the plot's top grid line. */
-    ctx.strokeStyle = '#e2dfd9';
+    ctx.strokeStyle = chartTheme.axis;
     ctx.lineWidth = 1;
     ctx.strokeRect(x.left + 0.5, top + 0.5, x.right - x.left - 1, PHASE_ROW);
     ctx.beginPath();
@@ -690,7 +759,7 @@ const phasePlugin = {
     for (const p of ph) {
       const x0 = x.getPixelForValue(p.t0), x1 = x.getPixelForValue(p.t1);
       if (p.t0 > 0) {
-        ctx.strokeStyle = '#c9c4bc';
+        ctx.strokeStyle = chartTheme.phaseRule;
         ctx.setLineDash([2, 3]);
         ctx.beginPath(); ctx.moveTo(x0, top); ctx.lineTo(x0, y.bottom); ctx.stroke();
         ctx.setLineDash([]);
@@ -698,36 +767,68 @@ const phasePlugin = {
       const now = c.$phaseNow != null && c.$phaseNow >= p.t0 && c.$phaseNow < p.t1;
       ctx.font = (now ? '600 ' : '400 ') + '11px ' + family;
       if (ctx.measureText(p.label).width + 6 > x1 - x0) continue;
-      ctx.fillStyle = now ? '#333' : '#8a857e';
+      ctx.fillStyle = now ? chartTheme.phaseNow : chartTheme.phaseText;
       ctx.fillText(p.label, (x0 + x1) / 2, top + PHASE_ROW / 2);
     }
     ctx.restore();
   }
 };
 
+/* Chart colours come from the page's CSS variables, so the chart follows the
+   light/dark theme; re-read and redrawn whenever the theme changes. */
+let chartTheme = {};
+function readChartTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = n => cs.getPropertyValue(n).trim();
+  chartTheme = {
+    blue: v('--blue'), orange: v('--orange'), grid: v('--grid'), axis: v('--axis'),
+    tick: v('--tick'), legend: v('--legend'), phaseRule: v('--phase-rule'),
+    phaseText: v('--phase-text'), phaseNow: v('--phase-now'),
+    heaterFill: v('--heater-fill'), heaterLine: v('--heater-line'), powerLine: v('--power-line'),
+  };
+}
+function applyChartTheme() {
+  if (!chart) return;
+  readChartTheme();
+  const t = chartTheme, o = chart.options, [tgt, act, heat, power] = chart.data.datasets;
+  tgt.borderColor = t.blue;
+  act.borderColor = t.orange;
+  heat.borderColor = t.heaterLine; heat.backgroundColor = t.heaterFill;
+  power.borderColor = t.powerLine;
+  for (const id of ['x', 'y', 'yHeat']) {
+    const sc = o.scales[id];
+    sc.ticks.color = t.tick; sc.title.color = t.tick; sc.border.color = t.axis;
+    if (sc.grid.display !== false) sc.grid.color = t.grid;
+  }
+  o.plugins.legend.labels.color = t.legend;
+  chart.update('none');
+}
+reflowTheme.onChange(applyChartTheme);
+
 function initChart() {
   const ctx = document.getElementById('chart').getContext('2d');
-  const axisText = { color: '#b0aba4', font: { size: 11 } };
+  readChartTheme();
+  const axisText = { color: chartTheme.tick, font: { size: 11 } };
   chart = new Chart(ctx, {
     type: 'line',
     data: {
       datasets: [
         /* Every dataset names its axis: with the heater axis defined first
            (for the stacking order), Chart.js would default to it. */
-        { label: 'Target',  data: [], yAxisID: 'y', borderColor: '#2558a0',
+        { label: 'Target',  data: [], yAxisID: 'y', borderColor: chartTheme.blue,
           backgroundColor: 'transparent',
           pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4], tension: 0, parsing: false },
-        { label: 'Actual',  data: [], yAxisID: 'y', borderColor: '#c05c28',
+        { label: 'Actual',  data: [], yAxisID: 'y', borderColor: chartTheme.orange,
           backgroundColor: 'transparent',
           pointRadius: 0, borderWidth: 2, tension: 0, parsing: false },
         /* Heater strip: filled blocks where the plug CONFIRMED on (grey with
            a dark outline, read by filled/empty, not by hue), and the duty the
            controller asked for as a thin line over it. */
         { label: 'Heater on', data: [], yAxisID: 'yHeat', stepped: 'before',
-          borderColor: '#444', borderWidth: 1, backgroundColor: 'rgba(110,110,110,0.55)',
+          borderColor: chartTheme.heaterLine, borderWidth: 1, backgroundColor: chartTheme.heaterFill,
           fill: 'origin', pointRadius: 0, spanGaps: false, parsing: false },
         { label: 'Requested power', data: [], yAxisID: 'yHeat',
-          borderColor: '#111', borderWidth: 1.2, backgroundColor: 'transparent',
+          borderColor: chartTheme.powerLine, borderWidth: 1.2, backgroundColor: 'transparent',
           pointRadius: 0, tension: 0, parsing: false },
       ]
     },
@@ -737,7 +838,7 @@ function initChart() {
         /* Time grid every 30 s (half and whole minutes), 60 s when the
            chart is too narrow for 30 s labels. */
         x: { type: 'linear', min: 0,
-             title: { display: true, text: 's', ...axisText },
+             title: { display: true, text: 'Time (s)', ...axisText },
              ticks: { ...axisText, autoSkip: false, maxRotation: 0 },
              afterBuildTicks: axis => {
                const span = axis.max - axis.min, step = axis.width / span * 30 >= 34 ? 30 : 60;
@@ -745,24 +846,26 @@ function initChart() {
                for (let v = Math.ceil(axis.min / step) * step; v <= axis.max; v += step)
                  axis.ticks.push({ value: v });
              },
-             grid: { color: '#eae7e2' },
-             border: { color: '#e2dfd9' } },
+             grid: { color: chartTheme.grid },
+             border: { color: chartTheme.axis } },
         /* Stacked: temperature on top, the heater strip below it. Chart.js lays
            out a left stack from the LAST-defined axis down to the first, so the
            strip is defined first (checked headless). */
-        yHeat: { min: 0, max: 1.05, stack: 'v', stackWeight: 1, offset: true,
+        yHeat: { min: 0, max: 1.25, stack: 'v', stackWeight: 1, offset: true,
              title: { display: true, text: 'Heater', ...axisText },
              ticks: { ...axisText, stepSize: 1, callback: v => v === 1 ? 'on' : v === 0 ? 'off' : '' },
              grid: { display: false },
-             border: { color: '#e2dfd9' } },
-        y: { min: 0, max: 270, stack: 'v', stackWeight: 5,
-             title: { display: true, text: '°C', ...axisText },
+             border: { color: chartTheme.axis } },
+        /* 0-270 °C in the display unit (the chart is plotted in it). */
+        y: { min: Math.round(reflowUnits.fromC(0)), max: Math.round(reflowUnits.fromC(270)),
+             stack: 'v', stackWeight: 5,
+             title: { display: true, text: reflowUnits.symbol(), ...axisText },
              ticks: axisText,
-             grid: { color: '#eae7e2' },
-             border: { color: '#e2dfd9' } }
+             grid: { color: chartTheme.grid },
+             border: { color: chartTheme.axis } }
       },
       plugins: {
-        legend: { labels: { color: '#737373', boxWidth: 12, font: { size: 11 } } }
+        legend: { labels: { color: chartTheme.legend, boxWidth: 12, font: { size: 11 } } }
       }
     },
     plugins: [phasePlugin]
@@ -793,7 +896,7 @@ function showCurve(name) {
 }
 
 function drawProfileLine(name, waypoints) {
-  const pts = waypoints.map(wp => ({ x: wp.time, y: wp.temp }));
+  const pts = waypoints.map(wp => ({ x: wp.time, y: reflowUnits.fromC(wp.temp) }));
   chart.$phases = waypoints.slice(1).map((wp, i) =>
     ({ t0: waypoints[i].time, t1: wp.time, label: wp.label || '' })).filter(p => p.label);
   chart.data.datasets[0].label = 'Target: ' + name;
@@ -935,13 +1038,17 @@ document.addEventListener('DOMContentLoaded', () => {
      before the WebSocket is ever opened — leaving the UI stuck on
      "connecting..." with no telemetry at all. The graph is optional; the
      telemetry feed is not. handleTelemetry already guards on `chart`. */
-  connect();
   initTips();
-  try {
-    initChart();
-  } catch (e) {
-    console.error('chart init failed — continuing without graph:', e);
-  }
+  /* Everything that shows a temperature waits for the display unit, a quick
+     GET /api/settings (°C if it fails). */
+  reflowUnits.ready(() => {
+    connect();
+    try {
+      initChart();
+    } catch (e) {
+      console.error('chart init failed — continuing without graph:', e);
+    }
+  });
 });
 </script>
 <div id="tip" role="tooltip"></div>

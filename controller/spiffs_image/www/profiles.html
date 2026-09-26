@@ -6,11 +6,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Profiles — Reflow</title>
+<script src="/theme.js"></script>
+<script src="/units.js"></script>
 <style>
 :root{
+  --card-border:transparent;
   --bg:#f4f3f0; --surface:#fff; --border:#e3e0da; --text:#1a1a1a;
   --muted:#737373; --faint:#a3a3a3; --red:#b4232b; --amber:#a87020;
   --orange:#c2410c; --shadow:0 1px 2px rgba(0,0,0,.06);
+  --err-bg:#fef2f2; --ok-bg:#f0fdf4; --ok:#2e7d32; color-scheme:light;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
@@ -21,7 +25,7 @@ header h1{font-size:.95rem;font-weight:500;margin:0}
 a.back{color:var(--muted);text-decoration:none;font-size:.82rem}
 a.back:hover{color:var(--text)}
 main{max-width:640px;margin:0 auto;padding:14px 14px 40px}
-.card{background:var(--surface);border-radius:6px;box-shadow:var(--shadow);
+.card{background:var(--surface);border:1px solid var(--card-border);border-radius:6px;box-shadow:var(--shadow);
   margin-bottom:12px;overflow:hidden}
 .card-header{padding:9px 14px;border-bottom:1px solid var(--border);
   font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;
@@ -57,17 +61,42 @@ td.num input{text-align:right;font-variant-numeric:tabular-nums}
 #msg{margin-top:10px;padding:8px 10px;border-radius:4px;font-size:.78rem;
   line-height:1.45;display:none}
 #msg.show{display:block}
-#msg.err{background:#fef2f2;border:1px solid var(--red);color:var(--red)}
-#msg.ok{background:#f0fdf4;border:1px solid #2e7d32;color:#2e7d32}
+#msg.err{background:var(--err-bg);border:1px solid var(--red);color:var(--red)}
+#msg.ok{background:var(--ok-bg);border:1px solid var(--ok);color:var(--ok)}
 svg{display:block;width:100%;height:170px;background:var(--bg);border-radius:4px}
 .summary{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:.76rem;margin-top:10px}
 .summary dt{color:var(--muted)}
 .summary dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+
+/* Dark: while no theme is chosen, follow the browser; a chosen theme wins
+   (theme.js sets data-theme). The same block twice, once per route. */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#000; --surface:#2c2c2c; --border:#5e5e5e; --text:#f5f5f5; --card-border:#5e5e5e;
+    --muted:#cfcfcf; --faint:#b4b4b4; --red:#e57373; --amber:#dcae52; --orange:#e8895a;
+    --shadow:0 1px 3px rgba(0,0,0,.6);
+    --err-bg:#3a1b1b; --ok-bg:#15301f; --ok:#5cbf66;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#000; --surface:#2c2c2c; --border:#5e5e5e; --text:#f5f5f5; --card-border:#5e5e5e;
+  --muted:#cfcfcf; --faint:#b4b4b4; --red:#e57373; --amber:#dcae52; --orange:#e8895a;
+  --shadow:0 1px 3px rgba(0,0,0,.6);
+  --err-bg:#3a1b1b; --ok-bg:#15301f; --ok:#5cbf66;
+  color-scheme:dark;
+}
+.theme-btn{
+  margin-left:auto;padding:4px 9px;min-height:28px;font-size:.74rem;font-family:inherit;
+  background:var(--surface);color:var(--muted);border:1px solid var(--border);
+  border-radius:4px;cursor:pointer}
+.theme-btn:hover{color:var(--text);border-color:var(--muted)}
 </style>
 
 <header>
   <a class="back" href="/">&larr; Back</a>
   <h1>Reflow profiles</h1>
+  <button class="theme-btn" type="button" onclick="reflowTheme.toggle()">Theme</button>
 </header>
 
 <main>
@@ -89,7 +118,7 @@ svg{display:block;width:100%;height:170px;background:var(--bg);border-radius:4px
         <dt>Peak</dt>            <dd id="s-peak">—</dd>
         <dt>Total time</dt>      <dd id="s-total">—</dd>
         <dt>Max ramp rate</dt>   <dd id="s-ramp">—</dd>
-        <dt>Above 217 °C</dt>    <dd id="s-tal">—</dd>
+        <dt id="s-tal-label">Above 217 °C</dt>    <dd id="s-tal">—</dd>
       </dl>
 
       <label for="p-name">Name</label>
@@ -99,7 +128,7 @@ svg{display:block;width:100%;height:170px;background:var(--bg);border-radius:4px
 
       <label>Waypoints</label>
       <table>
-        <thead><tr><th style="width:5.5em">Time (s)</th><th style="width:5.5em">Temp (°C)</th>
+        <thead><tr><th style="width:5.5em">Time (s)</th><th style="width:5.5em" id="th-temp">Temp (°C)</th>
                    <th>Label</th><th style="width:2.2em"></th></tr></thead>
         <tbody id="wps"></tbody>
       </table>
@@ -184,18 +213,22 @@ function newProfile() {
   clearMsg(); redraw(); loadList();
 }
 
-/* ── waypoint rows ── */
+/* ── waypoint rows ──
+   Profiles are stored in °C. Rows show and take the display unit (Settings):
+   converted on the way in (addRow) and out (readWaypoints), to 0.1 degree. */
+const r1 = v => Math.round(v * 10) / 10;
 function addRow(t, c, l) {
   const tb = document.getElementById('wps');
   if (tb.children.length >= 16) { show('16 waypoints is the firmware limit.', 'err'); return; }
   const tr = document.createElement('tr');
   tr.innerHTML =
     '<td class="num"><input type="number" class="wt" min="0" max="7200" step="1"></td>' +
-    '<td class="num"><input type="number" class="wc" min="0" max="400" step="1"></td>' +
+    '<td class="num"><input type="number" class="wc" min="' + Math.round(reflowUnits.fromC(0)) +
+    '" max="' + Math.round(reflowUnits.fromC(400)) + '" step="1"></td>' +
     '<td><input type="text" class="wl" maxlength="31" spellcheck="false"></td>' +
     '<td><button class="btn btn-small" title="Remove">&times;</button></td>';
   tr.querySelector('.wt').value = t ?? '';
-  tr.querySelector('.wc').value = c ?? '';
+  tr.querySelector('.wc').value = c == null || c === '' ? '' : r1(reflowUnits.fromC(c));
   tr.querySelector('.wl').value = l ?? '';
   tr.querySelectorAll('input').forEach(i => i.addEventListener('input', redraw));
   tr.querySelector('button').onclick = () => { tr.remove(); redraw(); };
@@ -206,7 +239,7 @@ function addRow(t, c, l) {
 function readWaypoints() {
   return Array.from(document.querySelectorAll('#wps tr')).map(tr => ({
     time: parseInt(tr.querySelector('.wt').value, 10),
-    temp: parseFloat(tr.querySelector('.wc').value),
+    temp: r1(reflowUnits.toC(parseFloat(tr.querySelector('.wc').value))),
     label: tr.querySelector('.wl').value.trim()
   }));
 }
@@ -228,15 +261,15 @@ function redraw() {
   let g = '';
   /* liquidus reference for lead-free paste */
   g += `<line x1="34" y1="${Y(217).toFixed(1)}" x2="590" y2="${Y(217).toFixed(1)}"
-         stroke="#b4232b" stroke-width="1" stroke-dasharray="4 3" opacity=".55"/>`;
-  g += `<text x="37" y="${(Y(217)-4).toFixed(1)}" font-size="9" fill="#b4232b">217 °C liquidus</text>`;
+         style="stroke:var(--red)" stroke-width="1" stroke-dasharray="4 3" opacity=".55"/>`;
+  g += `<text x="37" y="${(Y(217)-4).toFixed(1)}" font-size="9" style="fill:var(--red)">${reflowUnits.fmt(217)} liquidus</text>`;
   const pts = wps.map(w => `${X(w.time).toFixed(1)},${Y(w.temp).toFixed(1)}`).join(' ');
-  g += `<polyline points="${pts}" fill="none" stroke="#c2410c" stroke-width="2"/>`;
-  wps.forEach(w => { g += `<circle cx="${X(w.time).toFixed(1)}" cy="${Y(w.temp).toFixed(1)}" r="2.6" fill="#c2410c"/>`; });
-  g += `<line x1="34" y1="156" x2="590" y2="156" stroke="#a3a3a3" stroke-width="1"/>`;
-  g += `<text x="2" y="${Y(cMax)+9}" font-size="9" fill="#a3a3a3">${cMax.toFixed(0)}</text>`;
-  g += `<text x="2" y="154" font-size="9" fill="#a3a3a3">0</text>`;
-  g += `<text x="570" y="168" font-size="9" fill="#a3a3a3">${tMax}s</text>`;
+  g += `<polyline points="${pts}" fill="none" style="stroke:var(--orange)" stroke-width="2"/>`;
+  wps.forEach(w => { g += `<circle cx="${X(w.time).toFixed(1)}" cy="${Y(w.temp).toFixed(1)}" r="2.6" style="fill:var(--orange)"/>`; });
+  g += `<line x1="34" y1="156" x2="590" y2="156" style="stroke:var(--faint)" stroke-width="1"/>`;
+  g += `<text x="2" y="${Y(cMax)+9}" font-size="9" style="fill:var(--faint)">${reflowUnits.fromC(cMax).toFixed(0)}</text>`;
+  g += `<text x="2" y="154" font-size="9" style="fill:var(--faint)">${reflowUnits.fromC(0).toFixed(0)}</text>`;
+  g += `<text x="570" y="168" font-size="9" style="fill:var(--faint)">${tMax}s</text>`;
   svg.innerHTML = g;
 
   const sorted = [...wps].sort((a,b) => a.time - b.time);
@@ -255,9 +288,9 @@ function redraw() {
       if (v >= 217) tal++;
     }
   }
-  document.getElementById('s-peak').textContent  = Math.max(...wps.map(w => w.temp)).toFixed(0) + ' °C';
+  document.getElementById('s-peak').textContent  = reflowUnits.fmt(Math.max(...wps.map(w => w.temp)));
   document.getElementById('s-total').textContent = tMax + ' s';
-  document.getElementById('s-ramp').textContent  = ramp.toFixed(2) + ' °C/s';
+  document.getElementById('s-ramp').textContent  = reflowUnits.deltaFromC(ramp).toFixed(2) + ' ' + reflowUnits.symbol() + '/s';
   document.getElementById('s-tal').textContent   = tal + ' s';
 }
 
@@ -268,7 +301,8 @@ function validate(name, wps) {
   if (wps.length > 16)     return '16 waypoints is the firmware limit.';
   for (const w of wps) {
     if (!Number.isFinite(w.time) || !Number.isFinite(w.temp)) return 'Every waypoint needs a time and a temperature.';
-    if (w.time < 0 || w.temp < 0 || w.temp > 400) return 'Times must be positive and temperatures 0–400 °C.';
+    if (w.time < 0 || w.temp < 0 || w.temp > 400)
+      return 'Times must be positive and temperatures ' + reflowUnits.fmt(0) + ' to ' + reflowUnits.fmt(400) + '.';
   }
   for (let i = 1; i < wps.length; i++)
     if (wps[i].time <= wps[i-1].time)
@@ -329,6 +363,11 @@ function upload() {
   rd.readAsText(f);
 }
 
-loadList();
-newProfile();
+/* Rows and figures are in the display unit: wait for it. */
+reflowUnits.ready(() => {
+  document.getElementById('th-temp').textContent = 'Temp (' + reflowUnits.symbol() + ')';
+  document.getElementById('s-tal-label').textContent = 'Above ' + reflowUnits.fmt(217);
+  loadList();
+  newProfile();
+});
 </script>

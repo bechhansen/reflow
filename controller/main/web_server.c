@@ -12,6 +12,7 @@
 #include "freertos/semphr.h"
 #include "cJSON.h"
 #include "esp_spiffs.h"
+#include "nvs.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -29,6 +30,7 @@ static httpd_handle_t   s_server = NULL;
 static int              s_ws_fds[MAX_WS_CLIENTS];
 static SemaphoreHandle_t s_ws_mutex;
 static esp_timer_handle_t s_telemetry_timer;
+static char             s_temp_unit = 'C';   /* display unit, 'C' or 'F' (see Settings) */
 
 /* ── WebSocket client list ───────────────────────────────────────────────── */
 
@@ -133,6 +135,10 @@ static void telemetry_cb(void *arg)
         char host[40];
         wifi_manager_get_hostname(host, sizeof(host));
         cJSON_AddStringToObject(obj, "hostname", host);
+    }
+    {
+        char unit[2] = { s_temp_unit, 0 };
+        cJSON_AddStringToObject(obj, "temp_unit", unit);
     }
     cJSON_AddStringToObject(obj, "wifi_mode",
                             wifi_manager_get_mode() == WIFI_MGR_STA ? "sta" : "ap");
@@ -415,6 +421,60 @@ static esp_err_t api_profile_delete(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── Settings ──────────────────────────────────────────────────────────────
+   Device-wide display settings, kept in NVS namespace "ui". The temperature
+   unit only changes how the web pages show and take temperatures: firmware,
+   stored profiles, console and logs are always °C. */
+
+#define UI_NVS_NS "ui"
+
+static void settings_load(void)
+{
+    nvs_handle_t h;
+    uint8_t v = 'C';
+    if (nvs_open(UI_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u8(h, "temp_unit", &v);
+        nvs_close(h);
+    }
+    s_temp_unit = (v == 'F') ? 'F' : 'C';
+}
+
+static esp_err_t api_settings_get(httpd_req_t *req)
+{
+    char buf[40];
+    snprintf(buf, sizeof(buf), "{\"temp_unit\":\"%c\"}", s_temp_unit);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, buf);
+}
+
+/* {"temp_unit":"C"|"F"} */
+static esp_err_t api_settings_post(httpd_req_t *req)
+{
+    char buf[128] = {0};
+    int r = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (r <= 0) return ESP_FAIL;
+    cJSON *msg = cJSON_Parse(buf);
+    cJSON *u   = msg ? cJSON_GetObjectItem(msg, "temp_unit") : NULL;
+    char unit  = 0;
+    if (cJSON_IsString(u) && (strcmp(u->valuestring, "C") == 0 || strcmp(u->valuestring, "F") == 0))
+        unit = u->valuestring[0];
+    cJSON_Delete(msg);
+    if (!unit) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "temp_unit must be \"C\" or \"F\"");
+        return ESP_OK;
+    }
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(UI_NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, "temp_unit", (uint8_t)unit);
+        if (err == ESP_OK) err = nvs_commit(h);
+        nvs_close(h);
+    }
+    if (err == ESP_OK) s_temp_unit = unit;
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, err == ESP_OK ? "{\"ok\":true}" : "{\"ok\":false}");
+}
+
 /* ── REST: Wi-Fi ──────────────────────────────────────────────────────────── */
 
 static esp_err_t api_wifi_scan(httpd_req_t *req)
@@ -569,6 +629,7 @@ static esp_err_t static_file_handler(httpd_req_t *req)
 esp_err_t web_server_start(void)
 {
     s_ws_mutex = xSemaphoreCreateMutex();
+    settings_load();
     for (int i = 0; i < MAX_WS_CLIENTS; i++) s_ws_fds[i] = -1;
     plug_ctrl_add_result_cb(plug_result_cb);
 
@@ -580,7 +641,7 @@ esp_err_t web_server_start(void)
        sits on "connecting..." forever while plain GETs still succeed. */
     cfg.max_open_sockets  = HTTPD_MAX_OPEN_SOCKETS;
     cfg.lru_purge_enable  = true;
-    cfg.max_uri_handlers  = 16;  /* default is 8; we register 13 */
+    cfg.max_uri_handlers  = 16;  /* default is 8; we register 15 */
     cfg.uri_match_fn      = httpd_uri_match_wildcard;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "httpd start");
@@ -619,6 +680,15 @@ esp_err_t web_server_start(void)
         .handler = api_run_trace_get,
     };
     httpd_register_uri_handler(s_server, &run_trace);
+
+    static const httpd_uri_t settings_get = {
+        .uri = "/api/settings", .method = HTTP_GET, .handler = api_settings_get,
+    };
+    static const httpd_uri_t settings_post = {
+        .uri = "/api/settings", .method = HTTP_POST, .handler = api_settings_post,
+    };
+    httpd_register_uri_handler(s_server, &settings_get);
+    httpd_register_uri_handler(s_server, &settings_post);
 
     /* Wi-Fi REST */
     static const httpd_uri_t wifi_scan = {

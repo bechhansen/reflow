@@ -4,11 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Network — Reflow</title>
+<script src="/theme.js"></script>
 <style>
 :root{
+  --card-border:transparent;
   --bg:#f4f3f0; --surface:#fff; --border:#e3e0da; --text:#1a1a1a;
   --muted:#737373; --faint:#a3a3a3; --red:#b4232b; --amber:#a87020;
   --shadow:0 1px 2px rgba(0,0,0,.06);
+  --err-bg:#fef2f2; --ok-bg:#f0fdf4; --ok:#2e7d32; color-scheme:light;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
@@ -19,7 +22,7 @@ header h1{font-size:.95rem;font-weight:500;margin:0}
 a.back{color:var(--muted);text-decoration:none;font-size:.82rem}
 a.back:hover{color:var(--text)}
 main{max-width:520px;margin:0 auto;padding:14px 14px 40px}
-.card{background:var(--surface);border-radius:6px;box-shadow:var(--shadow);
+.card{background:var(--surface);border:1px solid var(--card-border);border-radius:6px;box-shadow:var(--shadow);
   margin-bottom:12px;overflow:hidden}
 .card-header{padding:9px 14px;border-bottom:1px solid var(--border);
   font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;
@@ -52,14 +55,38 @@ dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
 #msg{margin-top:10px;padding:8px 10px;border-radius:4px;font-size:.78rem;
   line-height:1.45;display:none}
 #msg.show{display:block}
-#msg.err{background:#fef2f2;border:1px solid var(--red);color:var(--red)}
-#msg.ok{background:#f0fdf4;border:1px solid #2e7d32;color:#2e7d32}
-@media(prefers-color-scheme:dark){}
+#msg.err{background:var(--err-bg);border:1px solid var(--red);color:var(--red)}
+#msg.ok{background:var(--ok-bg);border:1px solid var(--ok);color:var(--ok)}
+
+/* Dark: while no theme is chosen, follow the browser; a chosen theme wins
+   (theme.js sets data-theme). The same block twice, once per route. */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#000; --surface:#2c2c2c; --border:#5e5e5e; --text:#f5f5f5; --card-border:#5e5e5e;
+    --muted:#cfcfcf; --faint:#b4b4b4; --red:#e57373; --amber:#dcae52; --orange:#e8895a;
+    --shadow:0 1px 3px rgba(0,0,0,.6);
+    --err-bg:#3a1b1b; --ok-bg:#15301f; --ok:#5cbf66;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#000; --surface:#2c2c2c; --border:#5e5e5e; --text:#f5f5f5; --card-border:#5e5e5e;
+  --muted:#cfcfcf; --faint:#b4b4b4; --red:#e57373; --amber:#dcae52; --orange:#e8895a;
+  --shadow:0 1px 3px rgba(0,0,0,.6);
+  --err-bg:#3a1b1b; --ok-bg:#15301f; --ok:#5cbf66;
+  color-scheme:dark;
+}
+.theme-btn{
+  margin-left:auto;padding:4px 9px;min-height:28px;font-size:.74rem;font-family:inherit;
+  background:var(--surface);color:var(--muted);border:1px solid var(--border);
+  border-radius:4px;cursor:pointer}
+.theme-btn:hover{color:var(--text);border-color:var(--muted)}
 </style>
 
 <header>
   <a class="back" href="/">&larr; Back</a>
   <h1>Network settings</h1>
+  <button class="theme-btn" type="button" onclick="reflowTheme.toggle()">Theme</button>
 </header>
 
 <main>

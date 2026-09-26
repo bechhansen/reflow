@@ -117,8 +117,11 @@ runs every 0.5 s against a first-order-plus-dead-time model of the iron,
   nothing is pending. The wanted state is re-sent `reassert` s after each change
   and every `refresh` s. If the heater is meant to be off but the iron still
   heats faster than `anomaly_slope`, OFF is sent at once (`@E,…,anomaly`).
-  Unknown for more than `plug_timeout` is a fault. Faults (sensor, overtemp,
-  stall, plug) switch off immediately. The over-temperature limit is relative:
+  Unknown for more than `plug_timeout` is a fault. Faults (sensor, sensor_stale,
+  overtemp, stall, plug) switch off immediately. A reading more than 20 °C from
+  the last is rejected (the MLX90614 can return a bad value that passes PEC),
+  and 15 identical readings while heating fault the run (`sensor_stale`:
+  heating blind). The over-temperature limit is relative:
   the run's highest target (profile peak, hold or step temperature) plus
   `over_margin` (25 °C). There is no fixed ceiling in the code, so a hotter
   heat source can run a hotter profile.

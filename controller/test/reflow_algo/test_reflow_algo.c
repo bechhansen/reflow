@@ -435,6 +435,57 @@ static void test_sensor_fault(void)
     assert(!s.confirmed);                                   /* switched off */
 }
 
+static void test_implausible_reading_rejected(void)
+{
+    /* One wildly wrong reading (it passed the sensor's checksum) must not
+       trip the over-temperature fault or steer the heater. */
+    algo_params_t prm; algo_params_default(&prm);
+    algo_t a; sim_t s;
+    sim_init(&s, &prm, 140);
+    algo_start_hold(&a, &prm, 150);
+    algo_output_t o;
+    int k = 0;
+    for (; k < 100; k++) o = sim_tick(&s, &a, k * SIM_DT);
+    float T = s.T;
+    s.T = 400;                                   /* the bad reading */
+    o = sim_tick(&s, &a, k++ * SIM_DT);
+    s.T = T;
+    assert(o.phase == ALGO_RUNNING && o.tf < 200);
+    for (int j = 0; j < 40; j++, k++) o = sim_tick(&s, &a, k * SIM_DT);
+    assert(o.phase == ALGO_RUNNING);
+}
+
+static void test_frozen_reading_while_heating(void)
+{
+    /* The sensor keeps answering with the same value while the heater is on:
+       heating blind, so the run must stop. */
+    algo_params_t prm; algo_params_default(&prm);
+    algo_t a;
+    algo_start_hold(&a, &prm, 200);
+    algo_output_t o = { .phase = ALGO_RUNNING };
+    bool on = false;
+    int k = 0;
+    for (; k < 60 && o.phase != ALGO_FAULT; k++) {
+        algo_input_t in = { .t = k * SIM_DT, .sensor_ok = true, .temp = 100.0f,
+                            .plug_ok = true, .plug_on = on, .plug_pending = false };
+        algo_step(&a, &in, &o);
+        if (o.cmd == ALGO_CMD_ON) on = true;
+        if (o.cmd == ALGO_CMD_OFF) on = false;
+    }
+    assert(o.phase == ALGO_FAULT && o.fault == ALGO_FAULT_STALE);
+    printf("  frozen reading: fault after %.1f s of heating\n", (double)(k * SIM_DT));
+
+    /* The same frozen value with the heater off (above a 90 C hold, below
+       its over-temperature limit) is fine. */
+    algo_start_hold(&a, &prm, 90);
+    for (k = 0; k < 100; k++) {
+        algo_input_t in = { .t = k * SIM_DT, .sensor_ok = true, .temp = 100.0f,
+                            .plug_ok = true, .plug_on = false, .plug_pending = false };
+        algo_step(&a, &in, &o);
+    }
+    assert(o.phase == ALGO_RUNNING);
+}
+
 static void test_overtemp_fault(void)
 {
     /* A relay stuck on during a 150 C hold: fault at 150 + over_margin, and
@@ -588,6 +639,8 @@ int main(void)
     test_ghost_on_is_caught();
     test_sensor_fault();
     test_overtemp_fault();
+    test_implausible_reading_rejected();
+    test_frozen_reading_while_heating();
     test_plug_fault();
     test_flapping_plug_state();
     test_step_stops_at_max();

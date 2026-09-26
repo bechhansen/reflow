@@ -617,6 +617,7 @@ function handleTelemetry(d) {
   /* Run state label */
   const faults = {
     sensor:   'sensor lost',
+    sensor_stale: 'sensor reading frozen while heating',
     overtemp: 'over-temperature',
     stall:    'the iron could not keep up with the profile',
     plug:     'plug not responding',

@@ -41,7 +41,7 @@ jobs:
         if [[ "$GITHUB_REF" == refs/tags/* ]]; then
           VERSION="${GITHUB_REF_NAME}"
         else
-          VERSION=$(git describe --tags --always --dirty)
+          VERSION=$(git describe --tags --match 'v[0-9]*' --always --dirty)
         fi
         if [[ "$GITHUB_REF" == refs/tags/* && "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
           KIND=production
@@ -84,6 +84,9 @@ jobs:
         cp $B/partition_table/partition-table.bin out/usb/partition-table.bin
         cp $B/ota_data_initial.bin              out/usb/ota_data_initial.bin
         cp $B/controller.bin                    out/usb/reflow-controller.bin
+        # Licenses travel with every binary distribution.
+        cp LICENSE LICENSE-EXCEPTION.md THIRD-PARTY-NOTICES.md out/usb/
+        cp LICENSE LICENSE-EXCEPTION.md THIRD-PARTY-NOTICES.md out/
         cat > out/usb/FLASH.txt <<EOF
         Reflow controller ${{ steps.version.outputs.VERSION }}: first-time / recovery flash over USB.
         This keeps saved profiles, Wi-Fi settings and the Zigbee pairing.
@@ -107,6 +110,9 @@ jobs:
         path: |
           out/reflow-controller.bin
           out/reflow-${{ steps.version.outputs.VERSION }}-usb.zip
+          out/LICENSE
+          out/LICENSE-EXCEPTION.md
+          out/THIRD-PARTY-NOTICES.md
         retention-days: 30
 
   release:
@@ -134,7 +140,9 @@ jobs:
 
           - `reflow-controller.bin`: the firmware image (over-the-air update or manual upload)
           - `reflow-${{ needs.build.outputs.version }}-usb.zip`: first-time or recovery flash over USB
+
+          Licensed under GPL v3 with an additional permission for Espressif's binary-only libraries (LICENSE, LICENSE-EXCEPTION.md); third-party licenses in THIRD-PARTY-NOTICES.md.
         draft: false
         prerelease: ${{ needs.build.outputs.kind == 'prerelease' }}
         makeLatest: ${{ needs.build.outputs.kind == 'production' }}
-        artifacts: release_assets/reflow-controller.bin,release_assets/reflow-${{ needs.build.outputs.version }}-usb.zip
+        artifacts: release_assets/reflow-controller.bin,release_assets/reflow-${{ needs.build.outputs.version }}-usb.zip,release_assets/LICENSE,release_assets/LICENSE-EXCEPTION.md,release_assets/THIRD-PARTY-NOTICES.md

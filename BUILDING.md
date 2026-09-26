@@ -1,192 +1,154 @@
-# Building and Flashing the Reflow Controller
+# Building, Flashing and Releasing
 
 ## Prerequisites
 
-- **ESP-IDF v5.5 or later** — install from [https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/)
-- ESP32-C6 development board connected via USB
-- Python 3.9+ (installed by the IDF toolchain setup)
+- **ESP-IDF v6.1**: install it by following the [ESP-IDF getting started guide](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c6/get-started/).
+- **An ESP32-C6 board with 8 MB flash**, connected over USB.
+- **Python 3.9+**, installed along with ESP-IDF.
 
----
-
-## 1. Set Up the Environment
-
-Open a terminal and activate the ESP-IDF environment:
+## 1. Build
 
 ```bash
-source ~/esp/esp-idf/export.sh
-```
-
-Verify the target is set to ESP32-C6:
-
-```bash
+. ~/esp/esp-idf-v6.1/export.sh      # or wherever ESP-IDF is installed
 cd controller
-idf.py get-target
-# Should print: esp32c6
-```
-
-If not already set:
-
-```bash
-idf.py set-target esp32c6
-```
-
----
-
-## 2. Configure Wi-Fi Credentials (optional)
-
-Bake default Wi-Fi credentials into the build. This is optional — you can also configure Wi-Fi via the `Reflow-Setup` AP after first boot.
-
-```bash
-idf.py menuconfig
-```
-
-Navigate to **Component config → Reflow Controller** and set:
-- `Default Wi-Fi SSID` — your network name
-- `Default Wi-Fi Password` — your password
-
-Other configurable items in the same menu:
-- `I2C SDA pin` (default: GPIO 6)
-- `I2C SCL pin` (default: GPIO 7)
-- `Zigbee local endpoint number` (default: 10)
-
----
-
-## 3. Build the Firmware
-
-The first build downloads the Zigbee SDK managed components (`espressif/esp-zboss-lib` and `espressif/esp-zigbee-lib`) from the component registry — requires internet access.
-
-```bash
+idf.py set-target esp32c6           # once
 idf.py build
 ```
 
-A successful build ends with:
+The first build downloads the Espressif Zigbee libraries from the component
+registry, so it needs internet access.
 
-```
-Generated /path/to/controller/build/controller.bin
-```
+The web UI (`controller/web/`) and the default profiles (`controller/profiles/`)
+are compressed and embedded in the firmware at build time, so there is no
+separate filesystem image to build or flash.
 
-The SPIFFS image (`spiffs.bin`) containing the web UI and default profiles is also generated automatically.
+Optional settings are under `idf.py menuconfig` → **Reflow Controller**:
+- Wi-Fi SSID and password to build in (you can also set them from the
+  `Reflow-Setup` access point)
+- the I²C pins (SDA GPIO 6, SCL GPIO 7)
+- the Zigbee endpoint
+- the GitHub repository used for firmware updates
 
----
-
-## 4. Flash Firmware
-
-Find your device port (typically `/dev/tty.usbmodem*` on macOS or `/dev/ttyUSB0` on Linux):
-
-```bash
-ls /dev/tty.usb*     # macOS
-ls /dev/ttyUSB*      # Linux
-```
-
-Flash only the firmware (fastest for iterating on code changes):
+## 2. Flash over USB (first time, or recovery)
 
 ```bash
-idf.py -p /dev/tty.usbmodemXXXX flash
+idf.py -p /dev/cu.usbmodemXXXX flash monitor     # Linux: /dev/ttyACM0
 ```
 
----
+This writes the bootloader, the partition table, the OTA state and the
+firmware. It never writes the profiles partition, so saved profiles survive a
+reflash. Exit the monitor with **Ctrl-]**.
 
-## 5. Flash the SPIFFS Filesystem
+Without a build environment, flash a release's `reflow-<version>-usb.zip`
+instead. Its `FLASH.txt` has the `esptool.py` command.
 
-The SPIFFS partition holds the web UI (`/spiffs/www/index.html`) and the default reflow profiles (`/spiffs/profiles/*.json`).
+### Partition layout (8 MB)
 
-**Flash SPIFFS only** (use this when updating web UI or profiles without reflashing firmware):
+| Partition | Offset | Size | Contents |
+|---|---|---|---|
+| nvs | 0x9000 | 24 K | Wi-Fi, tuning parameters, settings, plug pairing |
+| phy_init | 0xF000 | 4 K | RF calibration |
+| ota_0 | 0x10000 | 2 MB | firmware slot A |
+| spiffs | 0x210000 | 512 K | your reflow profiles |
+| zb_storage, zb_fct | 0x290000 | 20 K | Zigbee network |
+| otadata | 0x295000 | 8 K | which slot boots |
+| ota_1 | 0x300000 | 2 MB | firmware slot B |
+
+## 3. First boot
+
+1. **Join Wi-Fi:** with no Wi-Fi stored, the controller opens the access point **`Reflow-Setup`**, which
+   is open with no password. Connect to it and open **http://192.168.4.1**.
+2. **Choose your network:** under **Network settings**, pick your network, enter the password and
+   save. The controller reboots and joins it.
+3. **Open the UI:** at **http://reflow.local**, or at the IP shown in the serial log or your
+   router.
+4. **Pair the plug:** click **Pair**, then put the plug into pairing mode (usually by holding
+   its button until the LED flashes). The badge shows **Off** once paired.
+
+Zigbee runs only when connected to your Wi-Fi: the ESP32-C6's single radio
+can't run Zigbee alongside its own access point.
+
+## 4. Firmware updates over Wi-Fi
+
+After the first USB flash, update from **Settings → Firmware**:
+
+- **Install:** the controller checks GitHub for the latest **production release**
+  60 s after boot, every 24 h, and when you press **Check now**. A newer one shows
+  as **Install vX.Y.Z**, and also in the main page's header. It installs only when you click.
+- **Upload firmware file:** installs a `.bin` from your computer, such as a local
+  build (`controller/build/controller.bin`) or a pre-release's
+  `reflow-controller.bin`.
+
+**Safety:**
+- Nothing installs while a run is active, and the heater is switched off first.
+- The new firmware goes into the idle slot and must start properly and confirm itself.
+  If it doesn't, the controller returns to the previous version by itself.
+- Updates keep Wi-Fi, tuning, settings, profiles and the plug pairing.
+
+## 5. Releasing
+
+Releases are built by GitHub Actions (`.github/workflows/esp32-build.yml`)
+from tags on `main`:
 
 ```bash
-idf.py -p /dev/tty.usbmodemXXXX spiffs-flash
+git tag v1.2.0
+git push origin v1.2.0
 ```
 
-**Flash everything at once** (firmware + bootloader + partition table + SPIFFS):
+| Tag | Result |
+|---|---|
+| `vX.Y.Z` | A production release. Controllers offer it as an update. |
+| `vX.Y.Z-alpha…`, `-beta…`, `-rc…` | A pre-release, for manual upload only. Never offered to controllers. |
+| any other push or pull request | Built and tested, kept as a 30-day workflow artifact. |
+
+Each release has two assets:
+- `reflow-controller.bin`: the firmware image, for updates and uploads.
+- `reflow-<version>-usb.zip`: the first-time or recovery USB flash.
+
+The firmware's version is the tag. CI writes it to `controller/version.txt`,
+and local builds use `git describe`. If you change `version.txt` locally, run
+`idf.py reconfigure`.
+
+## 6. Tests
 
 ```bash
-idf.py -p /dev/tty.usbmodemXXXX flash
+make -C controller/test/reflow_algo test    # control law against a simulated iron
+make -C controller/test/plug_fsm test       # plug state machine
 ```
 
-> The top-level `CMakeLists.txt` uses `spiffs_create_partition_image(spiffs spiffs_image FLASH_IN_PROJECT)`, so `idf.py flash` automatically includes the SPIFFS image.
+Both run in CI before every build.
 
----
+## Tuning for your heat source
 
-## 6. Monitor Serial Output
+The built-in model describes the iron the project was developed on. Another
+iron or hotplate heats and cools differently. Measure it once, with the heat
+source on the plug and you **present**:
 
 ```bash
-idf.py -p /dev/tty.usbmodemXXXX monitor
+# The ESP-IDF Python environment has pyserial. Close idf.py monitor first.
+PY=~/.espressif/python_env/idf6.1_py3.13_env/bin/python
+
+# Full power to 200 °C, then cooling; about 5 minutes.
+$PY controller/tools/hil.py step 1.0 300 200 --duration 300
+
+# Fit the model: prints K, tau, theta, loss_quad, gains and the ctl set lines.
+$PY controller/tools/hil.py fit controller/tools/logs/<step>.log --quad
+
+# Apply and keep the values:
+$PY controller/tools/hil.py cmd "ctl set K <value>"     # … one per printed line
+$PY controller/tools/hil.py cmd "ctl save"
 ```
 
-On a successful boot you should see:
+Then check it with a hold (`hil.py hold 150 --duration 240`) and a profile run
+(`hil.py run "SMD291SNL SAC305"`), and analyze them with `hil.py analyze <log>`.
+`ctl show` lists every parameter, and `ctl reset` returns to the defaults.
 
-```
-I (...)  wifi_mgr: STA connected, IP: 192.168.x.x
-I (...)  web_server: HTTP server started
-I (...)  zigbee_plug: Zigbee coordinator started (factory-new)
-```
-
-Exit the monitor with **Ctrl-]**.
-
----
-
-## 7. Flash + Monitor in One Step
+## Factory reset
 
 ```bash
-idf.py -p /dev/tty.usbmodemXXXX flash monitor
+idf.py -p /dev/cu.usbmodemXXXX erase-flash
+idf.py -p /dev/cu.usbmodemXXXX flash
 ```
 
----
-
-## 8. Erase Flash (Factory Reset)
-
-Clears all NVS data (Wi-Fi credentials, Zigbee pairing, uploaded profiles):
-
-```bash
-idf.py -p /dev/tty.usbmodemXXXX erase-flash
-```
-
-After erasing, reflash everything:
-
-```bash
-idf.py -p /dev/tty.usbmodemXXXX flash
-```
-
----
-
-## 9. First Boot Workflow
-
-1. Power on the ESP32-C6.
-2. If no Wi-Fi credentials are stored, the device starts as the **`Reflow-Setup`** access point (no password).
-3. Connect your phone or laptop to `Reflow-Setup`.
-4. Open **http://192.168.4.1** in a browser.
-5. Go to the **Wi-Fi Settings** tab, scan for your network, enter the password, and save. The device reboots and connects to your network.
-6. Find the device's new IP address in the serial monitor output, or from your router's DHCP table.
-7. Open the web UI at `http://<device-ip>`.
-
----
-
-## 10. Pairing a Zigbee Smart Plug
-
-1. In the web UI, go to the **Zigbee Plug** section.
-2. Click **Pair Plug**. A 60-second countdown starts.
-3. Put your smart plug into pairing mode (usually by holding the button until the LED flashes).
-4. The controller will detect the plug, store its address, and show **Paired** status.
-
----
-
-## Updating Web UI or Profiles Without Full Reflash
-
-Edit files in `controller/spiffs_image/www/` or `controller/spiffs_image/profiles/`, then:
-
-```bash
-idf.py build            # regenerates spiffs.bin
-idf.py -p /dev/tty.usbmodemXXXX spiffs-flash
-```
-
-No firmware reflash needed.
-
----
-
-## Partition Layout (4 MB flash)
-
-| Partition  | Type | Size   | Contents                      |
-|------------|------|--------|-------------------------------|
-| nvs        | data | 24 KB  | Wi-Fi credentials, Zigbee pairing |
-| phy_init   | data | 4 KB   | RF calibration data           |
-| factory    | app  | 1.5 MB | Firmware                      |
-| spiffs     | data | 512 KB | Web UI + reflow profiles       |
+This erases Wi-Fi, tuning, settings, profiles and the plug pairing. The default
+profiles are written again on the next boot.

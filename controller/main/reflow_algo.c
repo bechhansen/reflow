@@ -168,7 +168,23 @@ void algo_step(algo_t *a, const algo_input_t *in, algo_output_t *out)
     float t_run = in->t - a->t_start;
 
     /* ── Inputs ── */
-    if (in->sensor_ok) {
+    /* The MLX90614 can return a wildly wrong value that still passes its PEC
+       check: a reading more than ALGO_JUMP_C from the last one is treated as
+       no reading (the plate cannot move that fast in one tick); if it
+       persists, the sensor timeout faults the run. */
+    bool reading = in->sensor_ok;
+    if (reading && a->hist_n > 0) {
+        float last = a->hist_v[(a->hist_i - 1 + ALGO_SLOPE_N) % ALGO_SLOPE_N];
+        if (fabsf(in->temp - last) > ALGO_JUMP_C) reading = false;
+        /* A frozen reading while heating means heating blind: the
+           over-temperature check could never trip. */
+        if (reading && in->temp == last && a->have_state && a->last_on) {
+            if (++a->same_n >= ALGO_STALE_N) fault(a, ALGO_FAULT_STALE);
+        } else if (reading) {
+            a->same_n = 0;
+        }
+    }
+    if (reading) {
         a->t_sensor_ok = in->t;
         if (a->hist_n == 0) a->tf = in->temp;
         else                a->tf += (in->temp - a->tf) * dt / (p->filt_tau + dt);
@@ -373,6 +389,7 @@ const char *algo_fault_str(algo_fault_t f)
 {
     switch (f) {
         case ALGO_FAULT_SENSOR:   return "sensor";
+        case ALGO_FAULT_STALE:    return "sensor_stale";
         case ALGO_FAULT_OVERTEMP: return "overtemp";
         case ALGO_FAULT_STALL:    return "stall";
         case ALGO_FAULT_PLUG:     return "plug";

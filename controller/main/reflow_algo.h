@@ -56,6 +56,8 @@
 #define ALGO_PULSE_SLOPE_N 5     /* samples in the pulse-timing slope (2 s) */
 #define ALGO_I_BAND      15.0f   /* °C: no integration beyond this error */
 #define ALGO_SENSOR_TO_S 2.0f
+#define ALGO_JUMP_C      20.0f   /* a reading this far from the last is rejected */
+#define ALGO_STALE_N     15      /* identical readings while heating = frozen sensor */
 
 typedef struct {
     float K;            /* °C rise at full power, steady state */
@@ -111,6 +113,7 @@ typedef enum {
 typedef enum {
     ALGO_FAULT_NONE,
     ALGO_FAULT_SENSOR,
+    ALGO_FAULT_STALE,       /* reading frozen while heating: heating blind */
     ALGO_FAULT_OVERTEMP,
     ALGO_FAULT_STALL,
     ALGO_FAULT_PLUG,
@@ -176,6 +179,7 @@ typedef struct {
     float t_change;     /* when that state last changed */
     float t_cmd;        /* when a command was last issued */
     float t_sensor_ok, t_plug_ok;
+    int   same_n;           /* consecutive identical readings */
     algo_phase_t phase;
     algo_fault_t fault;
 } algo_t;

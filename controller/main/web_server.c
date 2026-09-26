@@ -93,16 +93,6 @@ void web_server_broadcast(const char *json)
 
 /* ── Telemetry ───────────────────────────────────────────────────────────── */
 
-static const char *state_str(ctrl_state_t s)
-{
-    switch (s) {
-        case CTRL_STATE_RUNNING:  return "running";
-        case CTRL_STATE_COMPLETE: return "complete";
-        case CTRL_STATE_ERROR:    return "error";
-        default:                  return "idle";
-    }
-}
-
 static void telemetry_cb(void *arg)
 {
     ctrl_status_t st;
@@ -115,7 +105,7 @@ static void telemetry_cb(void *arg)
     cJSON_AddStringToObject(obj, "type",        "telemetry");
     cJSON_AddNumberToObject(obj, "temp",        (double)st.temp);
     cJSON_AddNumberToObject(obj, "ambient",     st.ambient);
-    cJSON_AddStringToObject(obj, "state",       state_str(st.state));
+    cJSON_AddStringToObject(obj, "state",       reflow_ctrl_state_str(st.state));
     cJSON_AddBoolToObject  (obj, "sensor_ok",   st.sensor_ok);
     cJSON_AddBoolToObject  (obj, "plug_paired", zigbee_plug_is_paired());
     {
@@ -127,7 +117,18 @@ static void telemetry_cb(void *arg)
         cJSON_AddStringToObject(obj, "plug_state",     plug_state_str(ps.state));
         cJSON_AddBoolToObject  (obj, "plug_pending",   ps.pending);
     }
-    cJSON_AddStringToObject(obj, "profile",     "");
+    if (st.state == CTRL_STATE_IDLE) {
+        cJSON_AddStringToObject(obj, "profile", "");
+    } else {
+        cJSON_AddStringToObject(obj, "profile",   st.profile);
+        cJSON_AddStringToObject(obj, "phase",     st.phase);
+        cJSON_AddNumberToObject(obj, "elapsed",   (double)st.elapsed);
+        cJSON_AddNumberToObject(obj, "profile_t", (double)st.profile_t);
+        cJSON_AddNumberToObject(obj, "setpoint",  (double)st.setpoint);
+        cJSON_AddNumberToObject(obj, "power",     (double)st.power);
+        cJSON_AddStringToObject(obj, "fault",     st.fault);
+        cJSON_AddNumberToObject(obj, "run_id",    st.run_id);
+    }
     {
         char host[40];
         wifi_manager_get_hostname(host, sizeof(host));
@@ -183,6 +184,20 @@ static void ws_reply_plug_rejected(httpd_req_t *req, esp_err_t err)
     int n = snprintf(buf, sizeof(buf),
                      "{\"type\":\"plug_result\",\"ok\":false,\"state\":\"%s\",\"reason\":\"%s\"}",
                      plug_state_str(ps.state), plug_ctrl_err_reason(err));
+    httpd_ws_frame_t f = {
+        .type    = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)buf,
+        .len     = (size_t)n,
+    };
+    httpd_ws_send_frame(req, &f);
+}
+
+/* A refused start goes back to the client that asked. */
+static void ws_reply_run_refused(httpd_req_t *req, const char *reason)
+{
+    char buf[80];
+    int n = snprintf(buf, sizeof(buf), "{\"type\":\"run_result\",\"ok\":false,\"reason\":\"%s\"}",
+                     reason);
     httpd_ws_frame_t f = {
         .type    = HTTPD_WS_TYPE_TEXT,
         .payload = (uint8_t *)buf,
@@ -248,12 +263,12 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
     if (strcmp(t, "start") == 0) {
         cJSON *pname = cJSON_GetObjectItem(msg, "profile");
-        if (cJSON_IsString(pname)) {
-            reflow_profile_t profile;
-            if (profile_get_by_name(pname->valuestring, &profile) == ESP_OK) {
-                reflow_ctrl_start(&profile);
-            }
-        }
+        reflow_profile_t profile;
+        const char *why = "not_found";
+        if (!cJSON_IsString(pname) ||
+            profile_get_by_name(pname->valuestring, &profile) != ESP_OK ||
+            reflow_ctrl_start(&profile, &why) != ESP_OK)
+            ws_reply_run_refused(req, why);
     } else if (strcmp(t, "stop") == 0) {
         reflow_ctrl_stop();
     } else if (strcmp(t, "start_pairing") == 0) {
@@ -261,7 +276,8 @@ static esp_err_t ws_handler(httpd_req_t *req)
     } else if (strcmp(t, "unpair") == 0) {
         zigbee_plug_unpair();
     } else if (strcmp(t, "plug_toggle") == 0) {
-        esp_err_t perr = plug_ctrl_toggle();
+        /* During a run the controller owns the plug. */
+        esp_err_t perr = reflow_ctrl_is_active() ? ESP_ERR_NOT_ALLOWED : plug_ctrl_toggle();
         if (perr != ESP_OK) ws_reply_plug_rejected(req, perr);
     }
 
@@ -279,6 +295,40 @@ static esp_err_t api_profiles_get(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, buf);
     free(buf);
+    return ESP_OK;
+}
+
+/* ── REST: run trace ─────────────────────────────────────────────────────── */
+
+/* {"run_id":N,"points":[[elapsed,temp,setpoint,heater,power],...]}: the
+   current or last run's trace, so a page opened mid-run can draw the whole of
+   it. heater is the confirmed state (1 on, 0 off, -1 unknown), power the
+   requested duty 0..1. Streamed in chunks; the trace can hold ~1200 points. */
+static esp_err_t api_run_trace_get(httpd_req_t *req)
+{
+    enum { CHUNK = 64 };
+    /* Static: ~2 KB would crowd the httpd task stack, and handlers run one at
+       a time in that task. */
+    static ctrl_trace_pt_t pts[CHUNK];
+    static char  buf[CHUNK * 40 + 32];
+    ctrl_status_t st;
+    reflow_ctrl_get_status(&st);
+
+    httpd_resp_set_type(req, "application/json");
+    snprintf(buf, sizeof(buf), "{\"run_id\":%lu,\"points\":[", (unsigned long)st.run_id);
+    httpd_resp_send_chunk(req, buf, HTTPD_RESP_USE_STRLEN);
+    int first = 0, n;
+    while ((n = reflow_ctrl_trace_get(first, pts, CHUNK)) > 0) {
+        int len = 0;
+        for (int k = 0; k < n; k++)
+            len += snprintf(buf + len, sizeof(buf) - len, "%s[%.1f,%.1f,%.1f,%d,%.2f]",
+                            first + k ? "," : "", (double)pts[k].t, (double)pts[k].temp,
+                            (double)pts[k].sp, pts[k].plug, (double)pts[k].power);
+        httpd_resp_send_chunk(req, buf, len);
+        first += n;
+    }
+    httpd_resp_send_chunk(req, "]}", 2);
+    httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
 }
 
@@ -496,6 +546,10 @@ static esp_err_t static_file_handler(httpd_req_t *req)
     if (!f) { httpd_resp_send_404(req); return ESP_OK; }
 
     httpd_resp_set_type(req, mime_type(path));
+    /* Pages change with every SPIFFS flash: make the browser revalidate, or
+       it keeps running old UI code against new firmware. chart.js may cache. */
+    if (strcmp(mime_type(path), "text/html") == 0)
+        httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
 
     char *chunk = malloc(512);
     if (!chunk) { fclose(f); return httpd_resp_send_500(req); }
@@ -526,7 +580,7 @@ esp_err_t web_server_start(void)
        sits on "connecting..." forever while plain GETs still succeed. */
     cfg.max_open_sockets  = HTTPD_MAX_OPEN_SOCKETS;
     cfg.lru_purge_enable  = true;
-    cfg.max_uri_handlers  = 16;  /* default is 8; we register 12 */
+    cfg.max_uri_handlers  = 16;  /* default is 8; we register 13 */
     cfg.uri_match_fn      = httpd_uri_match_wildcard;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "httpd start");
@@ -559,6 +613,12 @@ esp_err_t web_server_start(void)
     httpd_register_uri_handler(s_server, &prof_get);
     httpd_register_uri_handler(s_server, &prof_post);
     httpd_register_uri_handler(s_server, &prof_del);
+
+    static const httpd_uri_t run_trace = {
+        .uri = "/api/run/trace", .method = HTTP_GET,
+        .handler = api_run_trace_get,
+    };
+    httpd_register_uri_handler(s_server, &run_trace);
 
     /* Wi-Fi REST */
     static const httpd_uri_t wifi_scan = {

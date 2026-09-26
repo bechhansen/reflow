@@ -2,8 +2,8 @@
 #include "esp_err.h"
 #include <stdbool.h>
 /* Waypoint table, the profile struct and the pure curve maths live in
-   reflow_curve.h so that the control law and the native simulator can share
-   them without pulling in ESP-IDF. This header adds SPIFFS-backed storage. */
+   reflow_curve.h so that the control law and its host tests can share them
+   without pulling in ESP-IDF. This header adds SPIFFS-backed storage. */
 #include "reflow_curve.h"
 
 esp_err_t profile_init(void);

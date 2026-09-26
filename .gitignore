@@ -14,3 +14,6 @@ __pycache__/
 controller/sdkconfig.old
 controller/test/plug_fsm/test_plug_fsm
 controller/test/plug_fsm/test_plug_fsm.dSYM/
+controller/test/reflow_algo/test_reflow_algo
+controller/test/reflow_algo/test_reflow_algo.dSYM/
+controller/tools/logs/

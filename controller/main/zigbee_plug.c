@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 #include "freertos/timers.h"
 #include "ha/esp_zigbee_ha_standard.h"
+#include "aps/esp_zigbee_aps.h"
 #include "sdkconfig.h"
 #include <string.h>
 
@@ -290,16 +291,47 @@ static void fill_plug_dst(esp_zb_zcl_basic_cmd_t *basic, esp_zb_zcl_address_mode
     }
 }
 
+/* On/Off goes out as a raw APS frame WITHOUT APS acknowledgement.
+   esp_zb_zcl_on_off_cmd_req() requests an APS ACK, and under Wi-Fi
+   coexistence the plug's ACK is often lost, so the stack retransmits the
+   command 1-3 s later. Measured on hardware: an OFF sent ~2.5 s after an ON
+   was confirmed, then the retransmitted ON arrived and switched the relay
+   back on (14 s of full-power heating under a confirmed OFF). Without the
+   APS ACK there is nothing to retransmit late; the MAC layer still retries
+   within milliseconds. A command that is lost outright is caught by the
+   read-back confirmation and the plug service's resend. */
+static uint8_t s_cmd_tsn = 0x80;   /* own ZCL sequence for these frames */
+
 uint8_t zigbee_plug_send_on_off(bool on)
 {
-    esp_zb_zcl_on_off_cmd_t cmd = {
-        .on_off_cmd_id = on ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID,
+    esp_zb_zcl_basic_cmd_t    dst;
+    esp_zb_zcl_address_mode_t mode;
+    fill_plug_dst(&dst, &mode);
+
+    uint8_t tsn = s_cmd_tsn++;
+    /* ZCL header: frame control = cluster-specific, client->server, default
+       response disabled (the read-back is what confirms); TSN; command id. */
+    static uint8_t frame[3];
+    frame[0] = 0x01 | 0x10;
+    frame[1] = tsn;
+    frame[2] = on ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID;
+
+    esp_zb_apsde_data_req_t req = {
+        .dst_addr_mode = (uint8_t)mode,
+        .dst_addr      = dst.dst_addr_u,
+        .dst_endpoint  = dst.dst_endpoint,
+        .profile_id    = ESP_ZB_AF_HA_PROFILE_ID,
+        .cluster_id    = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+        .src_endpoint  = dst.src_endpoint,
+        .asdu_length   = sizeof(frame),
+        .asdu          = frame,
+        .tx_options    = 0,        /* no APS ACK, hence no late retransmission */
+        .radius        = 0,        /* stack default */
     };
-    fill_plug_dst(&cmd.zcl_basic_cmd, &cmd.address_mode);
-    uint8_t tsn = esp_zb_zcl_on_off_cmd_req(&cmd);
-    ESP_LOGI(TAG, "CMD %-3s -> 0x%04x ep%d (tsn %u, %s addressing)",
+    esp_err_t err = esp_zb_aps_data_request(&req);
+    ESP_LOGI(TAG, "CMD %-3s -> 0x%04x ep%d (tsn %u, %s addressing, no APS ack)%s",
              on ? "ON" : "OFF", s_plug_addr, s_plug_ep, tsn,
-             s_have_ieee ? "IEEE" : "short");
+             s_have_ieee ? "IEEE" : "short", err == ESP_OK ? "" : " — send failed");
     return tsn;
 }
 

@@ -1,6 +1,6 @@
 #pragma once
 /* Plug service: the one place that switches the Zigbee plug. Anything that
-   wants the heater on or off (the UI's test toggle, the console, a future
+   wants the heater on or off (the UI's test toggle, the console, the reflow
    control algorithm) goes through here.
 
    Guarantees:
@@ -49,5 +49,7 @@ esp_err_t   plug_ctrl_toggle(void);
 /* Non-blocking; safe from any task, including esp_timer callbacks. */
 void        plug_ctrl_get_status(plug_status_t *out);
 
-/* Short machine-readable reason for a plug_ctrl_set()/toggle() rejection. */
+/* Short machine-readable reason for a plug_ctrl_set()/toggle() rejection.
+   Also maps ESP_ERR_NOT_ALLOWED to "running", which callers use when a reflow
+   run owns the plug. */
 const char *plug_ctrl_err_reason(esp_err_t err);

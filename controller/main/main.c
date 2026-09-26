@@ -4,6 +4,8 @@
 #include "esp_system.h"
 #include "driver/uart.h"
 #include "driver/uart_vfs.h"
+#include "driver/usb_serial_jtag.h"
+#include "freertos/semphr.h"
 #include "nvs_flash.h"
 #include "esp_check.h"
 #include "esp_netif.h"
@@ -23,72 +25,137 @@
 
 static const char *TAG = "main";
 
-/* ── UART console task ───────────────────────────────────────────────────── */
+/* ── Console ─────────────────────────────────────────────────────────────── */
 
-static void console_task(void *arg)
+static const char *HELP =
+    "Commands: start <profile>, step <duty> <secs> <maxT>, hold <temp>, stop, status,\r\n"
+    "  ctl show|save|reset, ctl set <key> <val>, log on|off,\r\n"
+    "  plug on|off|toggle|status, wifi, wifi-scan, wifi-clear\r\n";
+
+static SemaphoreHandle_t s_console_mutex;   /* two inputs, one command at a time */
+
+static void handle_line(char *line)
 {
-    static const char *HELP = "Commands: start <profile>, stop, status, plug on|off|toggle|status, "
-                              "wifi, wifi-scan, wifi-clear\r\n";
+    size_t len = strlen(line);
+    while (len > 0 && (line[len - 1] == '\r' || line[len - 1] == '\n')) line[--len] = '\0';
+    if (len == 0) return;
+
+    const char *why = NULL;
+    float a1, a2, a3;
+    char  key[24];
+    if (strncmp(line, "start ", 6) == 0) {
+        reflow_profile_t prof;
+        if (profile_get_by_name(line + 6, &prof) == ESP_OK) {
+            if (reflow_ctrl_start(&prof, &why) == ESP_OK) printf("Started: %s\r\n", prof.name);
+            else                                          printf("Refused: %s\r\n", why);
+        } else {
+            printf("Profile not found: '%s'\r\n", line + 6);
+        }
+    } else if (sscanf(line, "step %f %f %f", &a1, &a2, &a3) == 3) {
+        if (reflow_ctrl_start_step(a1, a2, a3, &why) == ESP_OK) printf("Started: step\r\n");
+        else                                                    printf("Refused: %s\r\n", why);
+    } else if (sscanf(line, "hold %f", &a1) == 1) {
+        if (reflow_ctrl_start_hold(a1, &why) == ESP_OK) printf("Started: hold\r\n");
+        else                                            printf("Refused: %s\r\n", why);
+    } else if (strcmp(line, "stop") == 0) {
+        reflow_ctrl_stop();
+        printf("Stopped\r\n");
+    } else if (strcmp(line, "status") == 0) {
+        ctrl_status_t st;
+        reflow_ctrl_get_status(&st);
+        printf("state=%s temp=%.1f ambient=%.1f sensor=%s",
+               reflow_ctrl_state_str(st.state), (double)st.temp, (double)st.ambient,
+               st.sensor_ok ? "ok" : "fault");
+        if (st.state != CTRL_STATE_IDLE)
+            printf(" run=%s elapsed=%.0f pt=%.0f sp=%.1f power=%.2f phase=%s fault=%s",
+                   st.profile, (double)st.elapsed, (double)st.profile_t, (double)st.setpoint,
+                   (double)st.power, st.phase, st.fault);
+        printf("\r\n");
+    } else if (strcmp(line, "ctl show") == 0) {
+        reflow_ctrl_params_print();
+    } else if (strcmp(line, "ctl save") == 0) {
+        esp_err_t e = reflow_ctrl_params_save();
+        if (e == ESP_OK) printf("Saved\r\n");
+        else             printf("Save failed: %s\r\n", esp_err_to_name(e));
+    } else if (strcmp(line, "ctl reset") == 0) {
+        reflow_ctrl_params_reset();
+        printf("Defaults restored\r\n");
+    } else if (sscanf(line, "ctl set %23s %f", key, &a1) == 2) {
+        if (reflow_ctrl_param_set(key, a1) == ESP_OK) printf("%s=%g\r\n", key, (double)a1);
+        else                                          printf("Unknown parameter '%s'\r\n", key);
+    } else if (strcmp(line, "log on") == 0 || strcmp(line, "log off") == 0) {
+        reflow_ctrl_set_log(strcmp(line, "log on") == 0);
+        printf("OK\r\n");
+    } else if (strcmp(line, "plug status") == 0) {
+        plug_status_t ps;
+        plug_ctrl_get_status(&ps);
+        printf("available=%s state=%s pending=%s\r\n",
+               ps.available ? "yes" : "no", plug_state_str(ps.state),
+               ps.pending ? (ps.target ? "->on" : "->off") : "no");
+    } else if (strcmp(line, "plug on") == 0 || strcmp(line, "plug off") == 0 ||
+               strcmp(line, "plug toggle") == 0) {
+        if (reflow_ctrl_is_active()) { printf("Rejected: a run owns the plug\r\n"); return; }
+        esp_err_t e = strcmp(line, "plug toggle") == 0 ? plug_ctrl_toggle()
+                    : plug_ctrl_set(strcmp(line, "plug on") == 0);
+        if (e == ESP_OK) printf("Requested; awaiting confirmation\r\n");
+        else             printf("Rejected: %s\r\n", plug_ctrl_err_reason(e));
+    } else if (strcmp(line, "wifi") == 0) {
+        char ip[20] = {};
+        wifi_manager_get_ip(ip, sizeof(ip));
+        printf("mode=%s ip=%s\r\n",
+               wifi_manager_get_mode() == WIFI_MGR_STA ? "sta" : "ap", ip);
+    } else if (strcmp(line, "wifi-clear") == 0) {
+        wifi_manager_set_credentials("", "");
+        printf("Wi-Fi credentials cleared — rebooting into AP mode\r\n");
+        vTaskDelay(pdMS_TO_TICKS(200));
+        esp_restart();
+    } else if (strcmp(line, "wifi-scan") == 0) {
+        char *buf = malloc(2048);
+        if (buf) {
+            wifi_manager_scan_json(buf, 2048);
+            printf("%s\r\n", buf);
+            free(buf);
+        }
+    } else {
+        printf("%s", HELP);
+    }
+}
+
+static void run_line(char *line)
+{
+    xSemaphoreTake(s_console_mutex, portMAX_DELAY);
+    handle_line(line);
+    xSemaphoreGive(s_console_mutex);
+}
+
+/* UART0 (GPIO16/17): the primary console. */
+static void uart_console_task(void *arg)
+{
     char line[128];
     printf("\r\nReflow console ready. %s", HELP);
-    while (fgets(line, sizeof(line), stdin)) {
-        size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\r' || line[len - 1] == '\n')) line[--len] = '\0';
-        if (len == 0) continue;
+    while (fgets(line, sizeof(line), stdin)) run_line(line);
+    vTaskDelete(NULL);
+}
 
-        if (strncmp(line, "start ", 6) == 0) {
-            reflow_profile_t prof;
-            if (profile_get_by_name(line + 6, &prof) == ESP_OK) {
-                esp_err_t e = reflow_ctrl_start(&prof);
-                if (e == ESP_OK) printf("Started: %s\r\n", prof.name);
-                else             printf("Error: %s\r\n", esp_err_to_name(e));
-            } else {
-                printf("Profile not found: '%s'\r\n", line + 6);
-            }
-        } else if (strcmp(line, "stop") == 0) {
-            reflow_ctrl_stop();
-            printf("Stopped\r\n");
-        } else if (strcmp(line, "status") == 0) {
-            ctrl_status_t st;
-            reflow_ctrl_get_status(&st);
-            static const char *state_names[] = {"idle", "running", "complete", "error"};
-            printf("state=%s temp=%.1f ambient=%.1f sensor=%s\r\n",
-                   state_names[st.state], (double)st.temp, (double)st.ambient,
-                   st.sensor_ok ? "ok" : "fault");
-        } else if (strcmp(line, "plug status") == 0) {
-            plug_status_t ps;
-            plug_ctrl_get_status(&ps);
-            printf("available=%s state=%s pending=%s\r\n",
-                   ps.available ? "yes" : "no", plug_state_str(ps.state),
-                   ps.pending ? (ps.target ? "->on" : "->off") : "no");
-        } else if (strcmp(line, "plug on") == 0 || strcmp(line, "plug off") == 0 ||
-                   strcmp(line, "plug toggle") == 0) {
-            esp_err_t e = strcmp(line, "plug toggle") == 0 ? plug_ctrl_toggle()
-                        : plug_ctrl_set(strcmp(line, "plug on") == 0);
-            if (e == ESP_OK) printf("Requested; awaiting confirmation\r\n");
-            else             printf("Rejected: %s\r\n", plug_ctrl_err_reason(e));
-        } else if (strcmp(line, "wifi") == 0) {
-            char ip[20] = {};
-            wifi_manager_get_ip(ip, sizeof(ip));
-            printf("mode=%s ip=%s\r\n",
-                   wifi_manager_get_mode() == WIFI_MGR_STA ? "sta" : "ap", ip);
-        } else if (strcmp(line, "wifi-clear") == 0) {
-            wifi_manager_set_credentials("", "");
-            printf("Wi-Fi credentials cleared — rebooting into AP mode\r\n");
-            vTaskDelay(pdMS_TO_TICKS(200));
-            esp_restart();
-        } else if (strcmp(line, "wifi-scan") == 0) {
-            char *buf = malloc(2048);
-            if (buf) {
-                wifi_manager_scan_json(buf, 2048);
-                printf("%s\r\n", buf);
-                free(buf);
-            }
-        } else {
-            printf("%s", HELP);
+/* The chip's USB-Serial-JTAG port, where the logs are mirrored as the
+   secondary console. stdin is UART0 only, so commands arriving here are read
+   through the driver. Output still goes out through the (non-driver)
+   secondary console, so printf never blocks when no USB host is listening. */
+static void usb_console_task(void *arg)
+{
+    char   line[128];
+    size_t len = 0;
+    for (;;) {
+        char c;
+        if (usb_serial_jtag_read_bytes(&c, 1, portMAX_DELAY) != 1) continue;
+        if (c == '\r' || c == '\n') {
+            line[len] = '\0';
+            if (len) run_line(line);
+            len = 0;
+        } else if (len < sizeof(line) - 1) {
+            line[len++] = c;
         }
     }
-    vTaskDelete(NULL);
 }
 
 void app_main(void)
@@ -119,12 +186,12 @@ void app_main(void)
         ESP_LOGW(TAG, "MLX90614 init failed — temperature reads will fail");
     }
 
+    /* Before the controller and the web server (which subscribe to plug
+       results) and Zigbee (which delivers the plug events). */
+    ESP_ERROR_CHECK(plug_ctrl_init());
+
     ESP_LOGI(TAG, "Initialising reflow controller...");
     ESP_ERROR_CHECK(reflow_ctrl_init());
-
-    /* Before the web server (which subscribes to plug results) and Zigbee
-       (which delivers the plug events). */
-    ESP_ERROR_CHECK(plug_ctrl_init());
 
     ESP_LOGI(TAG, "Initialising Wi-Fi...");
     ESP_ERROR_CHECK(wifi_manager_init());
@@ -159,5 +226,12 @@ void app_main(void)
     uart_vfs_dev_port_set_rx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CR);
     uart_vfs_dev_port_set_tx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CRLF);
 
-    xTaskCreate(console_task, "console", 4096, NULL, 3, NULL);
+    s_console_mutex = xSemaphoreCreateMutex();
+    xTaskCreate(uart_console_task, "console", 4096, NULL, 3, NULL);
+
+    usb_serial_jtag_driver_config_t usj = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    if (usb_serial_jtag_driver_install(&usj) == ESP_OK)
+        xTaskCreate(usb_console_task, "usb_console", 4096, NULL, 3, NULL);
+    else
+        ESP_LOGW(TAG, "USB-Serial-JTAG driver install failed — USB console input disabled");
 }

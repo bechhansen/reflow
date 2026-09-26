@@ -181,6 +181,7 @@ const char *plug_ctrl_err_reason(esp_err_t err)
     case ESP_ERR_INVALID_RESPONSE: return "unknown";
     case ESP_ERR_NOT_FOUND:        return "not_paired";
     case ESP_ERR_NOT_SUPPORTED:    return "unavailable";
+    case ESP_ERR_NOT_ALLOWED:      return "running";   /* callers: a reflow run owns the plug */
     default:                       return esp_err_to_name(err);
     }
 }

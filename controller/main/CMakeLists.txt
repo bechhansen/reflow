@@ -5,6 +5,8 @@ idf_component_register(
         "zigbee_plug.c"
         "plug_fsm.c"
         "plug_ctrl.c"
+        "reflow_curve.c"
+        "reflow_algo.c"
         "reflow_profile.c"
         "reflow_ctrl.c"
         "web_server.c"
@@ -14,6 +16,7 @@ idf_component_register(
         nvs_flash
         esp_driver_i2c
         esp_driver_uart
+        esp_driver_usb_serial_jtag
         esp_http_server
         spiffs
         cjson

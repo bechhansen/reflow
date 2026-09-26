@@ -57,9 +57,12 @@ main{
 @media(min-width:768px){#graph-panel{border-right:1px solid var(--border)}}
 
 #graph-stats{
-  display:grid;grid-template-columns:auto 1fr;gap:0 28px;
+  display:flex;flex-wrap:wrap;gap:8px 28px;
   align-items:end;margin-bottom:16px;flex-shrink:0;
 }
+#run-stats{display:flex;gap:0 28px}
+#run-stats[hidden]{display:none}
+.stat-value.small{font-size:1.25rem}
 .stat-label{font-size:.65rem;font-weight:500;text-transform:uppercase;letter-spacing:.09em;color:var(--faint);margin-bottom:3px}
 .stat-value{font-size:2rem;font-weight:300;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 #temp-big{color:var(--orange)}
@@ -130,6 +133,7 @@ input[type=file]{
 /* ── Run state label ── */
 #run-state{font-size:.77rem;color:var(--faint);margin-top:4px}
 #run-state.running {color:var(--green)}
+#run-state.cooling {color:var(--blue)}
 #run-state.complete{color:var(--blue)}
 #run-state.error   {color:var(--red)}
 
@@ -248,6 +252,20 @@ input[type=file]{
         <div class="stat-label">Sensor</div>
         <div class="stat-value" id="ambient-value">—</div>
       </div>
+      <div id="run-stats" hidden>
+        <div>
+          <div class="stat-label">Target</div>
+          <div class="stat-value small" id="setpoint-value">—</div>
+        </div>
+        <div>
+          <div class="stat-label">Heater</div>
+          <div class="stat-value small" id="power-value">—</div>
+        </div>
+        <div>
+          <div class="stat-label">Time</div>
+          <div class="stat-value small" id="elapsed-value">—</div>
+        </div>
+      </div>
     </div>
 
     <div id="ambient-warning"></div>
@@ -335,8 +353,10 @@ input[type=file]{
 let ws = null, chart = null;
 let pairCountdown = 0, pairTimer = null;
 let lastState = 'idle';
-let shownProfile = null;      /* profile whose curve is drawn */
+let wantedCurve = null;       /* profile whose curve SHOULD be on the chart */
+let drawnCurve = null;        /* profile whose curve IS on the chart */
 let fetchingProfile = null;   /* in-flight fetch, to avoid duplicates */
+let traceRun = null;          /* run_id the Actual trace belongs to */
 
 /* ── Tooltips ── */
 function initTips() {
@@ -431,7 +451,10 @@ function handleMessage(msg) {
   else if (msg.type === 'pairing_success') handlePairingSuccess(msg.plug_name);
   else if (msg.type === 'pairing_failed')  handlePairingFailed();
   else if (msg.type === 'plug_result')     handlePlugResult(msg);
+  else if (msg.type === 'run_result')      handleRunResult(msg);
 }
+
+const isActive = st => st === 'running' || st === 'cooling';
 
 function handleTelemetry(d) {
   /* Wi-Fi */
@@ -444,7 +467,8 @@ function handleTelemetry(d) {
      dropdown happens to show. Otherwise a run started elsewhere (another
      browser, the API) is plotted against the wrong curve, and the phase label
      — which comes from the running profile — contradicts the picture. */
-  if (d.profile) {
+  const testRun = d.profile === 'step' || d.profile === 'hold';   /* no curve */
+  if (d.profile && !testRun) {
     /* Keep the selector in step every frame: telemetry can arrive before the
        profile list has loaded, and a one-shot sync would then never happen.
        It is also LOCKED while a run is active — changing profiles mid-run
@@ -455,27 +479,13 @@ function handleTelemetry(d) {
         Array.from(sel.options).some(o => o.value === d.profile)) {
       sel.value = d.profile;
     }
-    sel.disabled = (d.state === 'running');
+    sel.disabled = isActive(d.state);
     sel.title = sel.disabled ? 'Locked while a run is in progress' : '';
-    /* Fetch the curve once per profile; only latch it on success so a failed
-       request retries on the next frame rather than leaving a blank chart. */
-    if (d.profile !== shownProfile && d.profile !== fetchingProfile) {
-      fetchingProfile = d.profile;
-      fetch('/api/profiles/' + encodeURIComponent(d.profile))
-        .then(r => r.json())
-        .then(p => {
-          if (!p.waypoints) throw new Error('no waypoints');
-          shownProfile = d.profile;
-          if (chart) drawProfileLine(p.waypoints);
-        })
-        .catch(() => {})
-        .finally(() => { fetchingProfile = null; });
-    }
+    showCurve(d.profile);
   } else {
     const sel = document.getElementById('profile-select');
-    sel.disabled = false;
-    sel.title = '';
-    if (d.state === 'idle') shownProfile = null;
+    sel.disabled = isActive(d.state);
+    sel.title = sel.disabled ? 'Locked while a test run is in progress' : '';
   }
 
   /* Network summary — full configuration lives on /network.html */
@@ -513,17 +523,44 @@ function handleTelemetry(d) {
   }
 
   /* Buttons */
-  const running = d.state === 'running';
-  document.getElementById('btn-start').disabled = running || !d.sensor_ok;
-  document.getElementById('btn-stop').disabled  = !running;
+  const active = isActive(d.state);
+  document.getElementById('btn-start').disabled = active || !d.sensor_ok;
+  document.getElementById('btn-stop').disabled  = !active;
+
+  /* Run stats and the live trace */
+  const runStats = document.getElementById('run-stats');
+  runStats.hidden = d.state === 'idle';
+  if (!runStats.hidden) {
+    document.getElementById('setpoint-value').textContent =
+      d.setpoint > 0 ? d.setpoint.toFixed(1) + ' °C' : '—';
+    document.getElementById('power-value').textContent =
+      active ? Math.round(d.power * 100) + ' %' : 'off';
+    const heldS = d.elapsed - d.profile_t;
+    const held  = heldS >= 1 && d.profile !== 'step' && d.profile !== 'hold';
+    document.getElementById('elapsed-value').textContent =
+      Math.round(d.elapsed) + ' s' + (held ? ' (' + Math.round(heldS) + ' held)' : '');
+  }
+  if (chart && d.state !== 'idle') addTracePoint(d, active);
 
   /* Run state label */
+  const faults = {
+    sensor:   'sensor lost',
+    overtemp: 'over-temperature',
+    stall:    'the iron could not keep up with the profile',
+    plug:     'plug not responding',
+  };
   const rs = document.getElementById('run-state');
-  if (!d.sensor_ok && d.state !== 'running') {
+  if (!d.sensor_ok && !active) {
     rs.textContent = 'Sensor not connected';
     rs.className   = 'error';
   } else {
-    rs.textContent = { idle:'', running:'Running', complete:'Complete', error:'Sensor error' }[d.state] || '';
+    rs.textContent = {
+      idle:     '',
+      running:  'Running' + (d.phase ? ' · ' + d.phase : ''),
+      cooling:  'Cooling · heater off',
+      complete: 'Complete',
+      error:    'Stopped: ' + (faults[d.fault] || d.fault || 'error'),
+    }[d.state] || '';
     rs.className   = d.state;
   }
 
@@ -561,48 +598,208 @@ function handleTelemetry(d) {
   /* Once the device reports the change as pending, telemetry governs. */
   if (d.plug_pending) plugToggleSent = false;
   document.getElementById('btn-plug-toggle').disabled =
-    apMode || !d.plug_available || d.plug_pending ||
+    apMode || active || !d.plug_available || d.plug_pending ||
     d.plug_state === 'unknown' || plugToggleSent;
 
   lastState = d.state;
 }
 
+/* Plotted against REAL elapsed time: the profile (dashed) and the measured
+   temperature. A run always starts at the profile's time 0. The controller follows
+   the profile in real time, so the dashed curve is also what it aims for.
+   A run seen for the first time (new run, or the page opened mid-run or after
+   it ended) is backfilled from the device's trace buffer; live points that
+   arrive meanwhile are kept if they are newer than the backfill. */
+function addTracePoint(d, active) {
+  const curve = d.profile !== 'step' && d.profile !== 'hold';
+  const [, act, heat, power] = chart.data.datasets;
+  if (d.run_id !== traceRun) {
+    traceRun = d.run_id;
+    act.data = []; heat.data = []; power.data = [];
+    if (!curve) { chart.data.datasets[0].data = []; chart.data.datasets[0].label = 'Target';
+                  chart.$phases = []; wantedCurve = drawnCurve = null; planEnd = 0; }
+    const id = d.run_id;
+    fetch('/api/run/trace').then(r => r.json()).then(t => {
+      if (t.run_id !== id || traceRun !== id) return;
+      const last  = t.points.length ? t.points[t.points.length - 1][0] : -1;
+      const newer = ds => ds.data.filter(p => p.x > last);
+      act.data   = t.points.map(p => ({ x: p[0], y: p[1] })).concat(newer(act));
+      heat.data  = t.points.map(p => ({ x: p[0], y: p[3] < 0 ? null : p[3] })).concat(newer(heat));
+      power.data = t.points.map(p => ({ x: p[0], y: p[4] })).concat(newer(power));
+      fitTraceAxis();
+      chart.update('none');
+    }).catch(() => {});
+  }
+  chart.$phaseNow = active && curve ? d.profile_t : null;
+  if (!active || !d.sensor_ok) { chart.update('none'); return; }
+  act.data.push({ x: d.elapsed, y: d.temp });
+  /* Unknown heater state is a gap, never a guess. */
+  heat.data.push({ x: d.elapsed, y: d.plug_state === 'on' ? 1 : d.plug_state === 'off' ? 0 : null });
+  power.data.push({ x: d.elapsed, y: d.power });
+  fitTraceAxis();
+  chart.update('none');
+}
+
+/* The x range covers the plan and grows a minute at a time past it (a held
+   clock makes a run longer than its profile). */
+let planEnd = 0;
+function fitTraceAxis() {
+  const data = chart.data.datasets[1].data;
+  const x = data.length ? data[data.length - 1].x : 0;
+  chart.options.scales.x.max = Math.max(planEnd, 60, Math.ceil((x + 30) / 60) * 60);
+}
+
 /* ── Chart ── */
+/* Phase names in a row of their own on top of the temperature plot: a cell
+   per segment of the profile (each segment is named by the waypoint it leads
+   to, as in the firmware), framed like the grid. The dotted waypoint lines
+   are the only vertical lines in the row: they run from its top down through
+   the plot and split it into the phase cells; the time grid stays out of it.
+   The phase being run is drawn bold: weight, not colour, so it reads for any
+   colour vision. A label that does not fit its cell is left out rather than
+   overlapped. */
+const PHASE_ROW = 20;    /* px, height of the phase row */
+const PHASE_GAP = 4;     /* px between the legend and the row */
+const phasePlugin = {
+  id: 'phases',
+  beforeUpdate(c) {
+    /* Make the legend box taller, which opens the band below it. The legend
+       only exists once the first update has started, so patch it here, once. */
+    const lg = c.legend;
+    if (!lg || lg.$phaseBand) return;
+    const fit = lg.fit;
+    lg.fit = function () { fit.call(this); this.height += PHASE_GAP + PHASE_ROW; };
+    lg.$phaseBand = true;
+  },
+  afterDatasetsDraw(c) {
+    const ph = c.$phases;
+    if (!ph || !ph.length) return;
+    const x = c.scales.x, y = c.scales.y, ctx = c.ctx;
+    const family = Chart.defaults.font.family;
+    const top = y.top - PHASE_ROW;
+    ctx.save();
+    /* The row's frame; its bottom edge is the plot's top grid line. */
+    ctx.strokeStyle = '#e2dfd9';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x.left + 0.5, top + 0.5, x.right - x.left - 1, PHASE_ROW);
+    ctx.beginPath();
+    ctx.rect(x.left, top, x.right - x.left, y.bottom - top);
+    ctx.clip();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const p of ph) {
+      const x0 = x.getPixelForValue(p.t0), x1 = x.getPixelForValue(p.t1);
+      if (p.t0 > 0) {
+        ctx.strokeStyle = '#c9c4bc';
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath(); ctx.moveTo(x0, top); ctx.lineTo(x0, y.bottom); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      const now = c.$phaseNow != null && c.$phaseNow >= p.t0 && c.$phaseNow < p.t1;
+      ctx.font = (now ? '600 ' : '400 ') + '11px ' + family;
+      if (ctx.measureText(p.label).width + 6 > x1 - x0) continue;
+      ctx.fillStyle = now ? '#333' : '#8a857e';
+      ctx.fillText(p.label, (x0 + x1) / 2, top + PHASE_ROW / 2);
+    }
+    ctx.restore();
+  }
+};
+
 function initChart() {
   const ctx = document.getElementById('chart').getContext('2d');
+  const axisText = { color: '#b0aba4', font: { size: 11 } };
   chart = new Chart(ctx, {
     type: 'line',
     data: {
       datasets: [
-        { label: 'Target',  data: [], borderColor: '#2558a0',
+        /* Every dataset names its axis: with the heater axis defined first
+           (for the stacking order), Chart.js would default to it. */
+        { label: 'Target',  data: [], yAxisID: 'y', borderColor: '#2558a0',
           backgroundColor: 'transparent',
           pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4], tension: 0, parsing: false },
+        { label: 'Actual',  data: [], yAxisID: 'y', borderColor: '#c05c28',
+          backgroundColor: 'transparent',
+          pointRadius: 0, borderWidth: 2, tension: 0, parsing: false },
+        /* Heater strip: filled blocks where the plug CONFIRMED on (grey with
+           a dark outline, read by filled/empty, not by hue), and the duty the
+           controller asked for as a thin line over it. */
+        { label: 'Heater on', data: [], yAxisID: 'yHeat', stepped: 'before',
+          borderColor: '#444', borderWidth: 1, backgroundColor: 'rgba(110,110,110,0.55)',
+          fill: 'origin', pointRadius: 0, spanGaps: false, parsing: false },
+        { label: 'Requested power', data: [], yAxisID: 'yHeat',
+          borderColor: '#111', borderWidth: 1.2, backgroundColor: 'transparent',
+          pointRadius: 0, tension: 0, parsing: false },
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       scales: {
-        x: { type: 'linear',
-             title: { display: true, text: 's', color: '#b0aba4', font: { size: 11 } },
-             ticks: { color: '#b0aba4', font: { size: 11 }, maxTicksLimit: 8 },
+        /* Time grid every 30 s (half and whole minutes), 60 s when the
+           chart is too narrow for 30 s labels. */
+        x: { type: 'linear', min: 0,
+             title: { display: true, text: 's', ...axisText },
+             ticks: { ...axisText, autoSkip: false, maxRotation: 0 },
+             afterBuildTicks: axis => {
+               const span = axis.max - axis.min, step = axis.width / span * 30 >= 34 ? 30 : 60;
+               axis.ticks = [];
+               for (let v = Math.ceil(axis.min / step) * step; v <= axis.max; v += step)
+                 axis.ticks.push({ value: v });
+             },
              grid: { color: '#eae7e2' },
              border: { color: '#e2dfd9' } },
-        y: { min: 0, max: 270,
-             title: { display: true, text: '°C', color: '#b0aba4', font: { size: 11 } },
-             ticks: { color: '#b0aba4', font: { size: 11 } },
+        /* Stacked: temperature on top, the heater strip below it. Chart.js lays
+           out a left stack from the LAST-defined axis down to the first, so the
+           strip is defined first (checked headless). */
+        yHeat: { min: 0, max: 1.05, stack: 'v', stackWeight: 1, offset: true,
+             title: { display: true, text: 'Heater', ...axisText },
+             ticks: { ...axisText, stepSize: 1, callback: v => v === 1 ? 'on' : v === 0 ? 'off' : '' },
+             grid: { display: false },
+             border: { color: '#e2dfd9' } },
+        y: { min: 0, max: 270, stack: 'v', stackWeight: 5,
+             title: { display: true, text: '°C', ...axisText },
+             ticks: axisText,
              grid: { color: '#eae7e2' },
              border: { color: '#e2dfd9' } }
       },
       plugins: {
         legend: { labels: { color: '#737373', boxWidth: 12, font: { size: 11 } } }
       }
-    }
+    },
+    plugins: [phasePlugin]
   });
 }
 
-function drawProfileLine(waypoints) {
-  chart.data.datasets[0].data = waypoints.map(wp => ({ x: wp.time, y: wp.temp }));
-  chart.options.scales.x.max = waypoints[waypoints.length - 1].time + 30;
+/* The one way a target curve reaches the chart. Every caller states which
+   profile it wants; a fetch reply is drawn only if that is still the wanted
+   one. Two unguarded fetches (the dropdown default on page load, the running
+   profile from telemetry) used to race, and the loser could leave a run drawn
+   against the wrong profile for its whole duration. Failed fetches are not
+   latched, so the next telemetry frame retries. */
+function showCurve(name) {
+  const key = name;
+  wantedCurve = key;
+  if (!chart || !name || key === drawnCurve || key === fetchingProfile) return;
+  fetchingProfile = key;
+  fetch('/api/profiles/' + encodeURIComponent(name))
+    .then(r => r.json())
+    .then(p => {
+      if (!p.waypoints) throw new Error('no waypoints');
+      if (wantedCurve !== key) return;        /* superseded while in flight */
+      drawnCurve = key;
+      drawProfileLine(name, p.waypoints);
+    })
+    .catch(() => {})
+    .finally(() => { if (fetchingProfile === key) fetchingProfile = null; });
+}
+
+function drawProfileLine(name, waypoints) {
+  const pts = waypoints.map(wp => ({ x: wp.time, y: wp.temp }));
+  chart.$phases = waypoints.slice(1).map((wp, i) =>
+    ({ t0: waypoints[i].time, t1: wp.time, label: wp.label || '' })).filter(p => p.label);
+  chart.data.datasets[0].label = 'Target: ' + name;
+  chart.data.datasets[0].data = pts;
+  planEnd = pts[pts.length - 1].x + 30;
+  fitTraceAxis();
   chart.update('none');
 }
 
@@ -631,18 +828,11 @@ function onProfileChange() {
      and the telemetry sync will not restore it (d.profile has not changed), so
      you end up comparing the live trace against a profile that is not running
      — which is exactly how a good run can look like a broken one. */
-  if (lastState === 'running' && shownProfile && name !== shownProfile) {
-    toast('Run in progress — chart stays on "' + shownProfile + '"');
+  if (isActive(lastState) && wantedCurve && name !== wantedCurve) {
+    toast('Run in progress — chart stays on "' + wantedCurve + '"');
     return;
   }
-  fetch('/api/profiles/' + encodeURIComponent(name))
-    .then(r => r.json())
-    .then(p => {
-      if (!p.waypoints) return;
-      if (!chart) return;
-      drawProfileLine(p.waypoints);
-    })
-    .catch(() => {});
+  showCurve(name);
 }
 
 /* ── Reflow ── */
@@ -652,6 +842,17 @@ function startReflow() {
   send({ type: 'start', profile: name });
 }
 function stopReflow() { send({ type: 'stop' }); }
+
+function handleRunResult(m) {
+  const reasons = {
+    busy:      'a run is already active',
+    sensor:    'the sensor is not reading',
+    plug:      'the plug is not paired, or its state is not known yet',
+    profile:   'the profile is invalid',
+    not_found: 'profile not found',
+  };
+  if (!m.ok) toast('Not started: ' + (reasons[m.reason] || m.reason), 'error');
+}
 
 /* ── Zigbee pairing ── */
 function startPairing() {
@@ -679,8 +880,15 @@ function closePairingOverlay()     { document.getElementById('pairing-overlay').
    Disabled from the click until the device confirms or rejects, so a second
    click cannot race the first. The device rejects it anyway ("busy"). */
 let plugToggleSent = false, plugToggleTimer = null;
+/* A Test toggle waits for its answer: the next plug result is ours. Longer
+   than plugToggleSent, which only covers the wait until the change shows as
+   pending; a confirmation can take a few seconds more. */
+let toggleAwaiting = false, toggleAwaitTimer = null;
 function plugToggle() {
   plugToggleSent = true;
+  toggleAwaiting = true;
+  clearTimeout(toggleAwaitTimer);
+  toggleAwaitTimer = setTimeout(() => { toggleAwaiting = false; }, 10000);
   document.getElementById('btn-plug-toggle').disabled = true;
   send({ type: 'plug_toggle' });
   /* If the request was lost with the socket, do not stay locked forever. */
@@ -698,9 +906,20 @@ function handlePlugResult(m) {
     unknown:     'plug state is not known yet',
     not_paired:  'no plug paired',
     unavailable: 'Zigbee is not running',
+    running:     'a reflow run owns the plug',
   };
-  if (m.ok) toast('Plug confirmed ' + m.state.toUpperCase(), 'success');
-  else      toast('Plug not switched: ' + (reasons[m.reason] || m.reason), 'error');
+  /* Only results that answer the user or warn them. The controller's own
+     switching (every few seconds in a run) is shown by the heater strip, and
+     it retries a failed change itself; a lasting failure ends the run with a
+     plug fault in the run status. */
+  const mine = toggleAwaiting;
+  toggleAwaiting = false;
+  clearTimeout(toggleAwaitTimer);
+  if (m.ok) {
+    if (mine) toast('Plug confirmed ' + m.state.toUpperCase(), 'success');
+  } else if (mine || !isActive(lastState)) {
+    toast('Plug not switched: ' + (reasons[m.reason] || m.reason), 'error');
+  }
 }
 
 async function unpair() {

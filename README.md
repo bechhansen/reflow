@@ -10,11 +10,11 @@ switched by an off-the-shelf Zigbee smart plug and controlled from your
 browser. An ESP32-C6 reads the soleplate with an IR sensor and follows a
 reflow profile.
 
-![The web interface after an SMD291SNL SAC305 run: the dashed profile and the measured temperature, the profile's phases along the top, and the heater strip below (grey: heater on; line: requested power)](docs/ui-run.png)
+![The web interface after a SAC305 Lead-Free run: the dashed profile and the measured temperature, the profile's phases along the top, and the heater strip below (grey: heater on; line: requested power)](docs/ui-run.png)
 
-*A complete SMD291SNL SAC305 run in the web interface:*
-- *The measured temperature (solid) follows the profile (dashed) through preheat and soak.*
-- *The heater strip shows the separate 2 s pulses on the soak, and full power at the peak, where the iron's own thermostat cuts out.*
+*A complete run of the built-in SAC305 Lead-Free profile in the web interface:*
+- *The measured temperature (solid) follows the profile (dashed) through preheat, soak and the 245 °C peak.*
+- *The heater strip shows the separate 2 s pulses on the soak, and full power on the ramp to the peak.*
 - *Cool-down is passive.*
 
 ## The problem
